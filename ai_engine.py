@@ -1,7 +1,6 @@
 """
 AI Engine & Analytics Logic
 Handles data processing, statistical analysis, and recovery predictions.
-Separated from app.py to keep the main application clean.
 """
 import random
 import time
@@ -11,10 +10,7 @@ class AIEngine:
     
     @staticmethod
     def get_detailed_analytics(sessions):
-        """
-        Processes session history for the Analytics graphs.
-        Returns history array and exercise distribution stats.
-        """
+        """Processes session history for the Analytics graphs."""
         history = []
         exercise_counts = {}
         total_acc_sum = 0
@@ -23,28 +19,21 @@ class AIEngine:
         for s in sessions:
             reps = s.get('total_reps', 0)
             errors = s.get('total_errors', 0)
-            # Fallback to 'Freestyle' if exercise name missing
             exercise = s.get('exercise', 'Freestyle') 
             
-            # Calculate Accuracy per session
             acc = 100
             if reps > 0:
                 acc = max(0, 100 - int((errors / reps) * 20))
             
-            # History Data for Line Charts
-            # Convert timestamp to date obj safely if needed, or use stored date string
-            # We use the stored 'date' string "YYYY-MM-DD" for display
             date_str = s.get('date', 'Unknown')
-            
             history.append({
                 'date': date_str,
-                'date_short': date_str[5:] if len(date_str) >= 10 else date_str, # "MM-DD"
+                'date_short': date_str[5:] if len(date_str) >= 10 else date_str,
                 'reps': reps,
                 'accuracy': acc,
                 'duration': s.get('duration', 0)
             })
             
-            # Exercise Aggregation
             if exercise in exercise_counts:
                 exercise_counts[exercise] += reps
             else:
@@ -54,9 +43,7 @@ class AIEngine:
                 total_acc_sum += acc
                 count_acc += 1
 
-        # Format exercise stats for Bar Chart
         exercise_stats = [{'name': k, 'total_reps': v} for k, v in exercise_counts.items()]
-        
         avg_accuracy = round(total_acc_sum / count_acc) if count_acc > 0 else 100
 
         return {
@@ -67,43 +54,31 @@ class AIEngine:
 
     @staticmethod
     def get_recovery_prediction(sessions):
-        """
-        Generates AI predictions for ROM, Asymmetry, and Recommendations.
-        """
+        """Generates AI predictions for ROM, Asymmetry, Recommendations, and Session History."""
         if not sessions:
             return None
 
         # 1. COMPLIANCE & STREAK
         dates = [s['date'] for s in sessions]
         today = datetime.now().date()
-        
-        # Calculate simple streak (consecutive days backward from today)
         date_set = set(dates)
         
-        # Simple loop to count backwards from today
         loop_date = today
         current_streak = 0
-        
-        # Check if streak is active (trained today or yesterday)
         if loop_date.strftime("%Y-%m-%d") not in date_set:
-             # Check yesterday
              yesterday = loop_date - timedelta(days=1)
              if yesterday.strftime("%Y-%m-%d") in date_set:
-                 loop_date = yesterday # Start counting from yesterday
-             else:
-                 # Streak broken
-                 pass
+                 loop_date = yesterday
 
         while loop_date.strftime("%Y-%m-%d") in date_set:
             current_streak += 1
             loop_date -= timedelta(days=1)
         
-        # Weekly Adherence (Last 7 days)
         last_7_days = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
         days_trained = sum(1 for d in last_7_days if d in date_set)
         adherence = int((days_trained / 7) * 100)
 
-        # 2. ASYMMETRY (Right vs Left)
+        # 2. ASYMMETRY
         total_right = sum(s.get('right_reps', 0) for s in sessions)
         total_left = sum(s.get('left_reps', 0) for s in sessions)
         total_limb = total_right + total_left
@@ -111,73 +86,89 @@ class AIEngine:
         if total_limb > 0:
             asymmetry = abs(total_right - total_left) / total_limb * 100
 
-        # 3. AI DERIVED METRICS (Simulating ROM & Consistency based on Accuracy)
-        # We infer that higher accuracy = better ROM & Stability
+        # 3. AI METRICS & SESSION HISTORY
         recent_sessions = sessions[-5:]
         rom_progress = []
         stability_score = 0
-        
-        for s in recent_sessions:
-            # Re-calc accuracy for internal use
+        session_history = []
+
+        # --- FIX: Ensure we have data for charts ---
+        # If user has only 1 session, add a dummy "Baseline" point so the line chart works
+        if len(recent_sessions) == 1:
+            try:
+                base_date = datetime.strptime(recent_sessions[0]['date'], "%Y-%m-%d")
+                prev_date = (base_date - timedelta(days=1)).strftime("%Y-%m-%d")
+                rom_progress.append({'date': prev_date[5:], 'rom': 70}) # Start at 70 deg baseline
+            except:
+                pass
+
+        for s in sessions:
             reps = s.get('total_reps', 1) or 1
-            acc = max(0, 100 - int((s.get('total_errors', 0) / reps) * 20))
+            errors = s.get('total_errors', 0)
+            acc = max(0, 100 - int((errors / reps) * 20))
             
-            # Simulate ROM increasing with accuracy (Medical logic: better control = better range)
-            base_rom = 85 + (acc * 0.5)  # Range ~85 to ~135 degrees
-            # Add slight randomness for organic data look
+            # Simulate metrics based on data
+            base_rom = 85 + (acc * 0.5) 
             rom_val = min(145, max(60, int(base_rom + random.uniform(-5, 5))))
             
+            # Prepare data for charts
             date_label = s.get('date', 'Unknown')
+            
+            session_history.append({
+                'date': date_label,
+                'accuracy': acc,
+                'reps': reps,
+                'rom': rom_val,
+                'errors': errors
+            })
+
+        for s in recent_sessions:
+            reps = s.get('total_reps', 1) or 1
+            errors = s.get('total_errors', 0)
+            acc = max(0, 100 - int((errors / reps) * 20))
+            base_rom = 85 + (acc * 0.5)
+            rom_val = min(145, max(60, int(base_rom + random.uniform(-5, 5))))
+            
+            # Date Formatting Safe Check
+            date_str = s.get('date', 'Unknown')
+            short_date = date_str[5:] if len(date_str) >= 10 else date_str
+
             rom_progress.append({
-                'date': date_label[5:] if len(date_label) >= 10 else date_label, 
+                'date': short_date, 
                 'rom': rom_val
             })
-            
             stability_score += acc
             
         avg_stability = int(stability_score / len(recent_sessions)) if recent_sessions else 0
 
-        # 4. RECOMMENDATIONS ENGINE
+        # 4. RECOMMENDATIONS
         recommendations = []
-        
-        # Asymmetry Rule
         if asymmetry > 15:
             weaker = "Left" if total_right > total_left else "Right"
-            recommendations.append(f"Imbalance detected: Your {weaker} side is lagging by {int(asymmetry)}%. Focus on unilateral exercises.")
-        
-        # Stability Rule
+            recommendations.append(f"Imbalance: {weaker} side lagging by {int(asymmetry)}%. Use unilateral exercises.")
         if avg_stability < 70:
-            recommendations.append("Stability Score Low: Slow down your rep tempo to improve motor control.")
+            recommendations.append("Low Stability: Slow down rep tempo to improve control.")
         elif avg_stability > 90:
-            recommendations.append("Excellent Stability: You are ready to increase resistance or weight.")
-        
-        # Compliance Rule
+            recommendations.append("High Stability: Ready to increase resistance.")
         if adherence < 50:
-            recommendations.append("Consistency Alert: Try to train at least 4 days a week for optimal recovery.")
+            recommendations.append("Consistency: Aim for 4+ days/week.")
 
-        # 5. HOTSPOTS SIMULATION (In a real app, this would come from the specific joint errors)
-        # For now, we simulate hotspots based on stability
+        # 5. HOTSPOTS
         severity = 100 - avg_stability
-        # Ensure values are safe integers
         hotspots = {
             'shoulder': int(severity * random.uniform(0.5, 1.0)),
             'elbow': int(severity * random.uniform(0.2, 0.6)),
             'hip': int(severity * random.uniform(0.1, 0.4))
         }
 
+        session_history.reverse()
+
         return {
             'rom_chart': rom_progress,
-            'asymmetry': {
-                'right': total_right, 
-                'left': total_left, 
-                'score': int(asymmetry)
-            },
+            'asymmetry': {'right': total_right, 'left': total_left, 'score': int(asymmetry)},
             'stability_score': avg_stability,
-            'compliance': {
-                'streak': current_streak, 
-                'weekly_adherence': adherence, 
-                'days_trained': days_trained
-            },
+            'compliance': {'streak': current_streak, 'weekly_adherence': adherence, 'days_trained': days_trained},
             'recommendations': recommendations,
-            'hotspots': hotspots
+            'hotspots': hotspots,
+            'session_history': session_history
         }
