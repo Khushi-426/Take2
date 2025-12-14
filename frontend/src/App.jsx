@@ -5,10 +5,19 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import { AuthProvider } from './context/AuthContext'; 
 import { GoogleOAuthProvider } from '@react-oauth/google'; 
 
-// Renaming the import for clarity: Existing Dashboard is now PatientDashboard
+// Dashboard components
 import PatientDashboard from './Dashboard'; 
-import TherapistDashboard from './TherapistDashboard'; // NEW: Therapist Dashboard
-import HomeRedirect from './HomeRedirect'; // NEW: Logic for the root path
+import TherapistDashboard from './TherapistDashboard'; 
+import HomeRedirect from './HomeRedirect'; 
+
+// Therapist-Only Pages
+import TherapistPatientMonitoring from './pages/TherapistPatientMonitoring.jsx'; 
+import TherapistExerciseLibrary from './pages/TherapistExerciseLibrary.jsx';
+import TherapistProtocolManager from './pages/TherapistProtocolManager.jsx';
+import TherapistNotificationLog from './pages/TherapistNotificationLog.jsx';
+import TherapistAnalytics from './pages/TherapistAnalytics.jsx'; // NEW IMPORT
+import SessionReviewScreen from './components/SessionReviewScreen.jsx'; // NEW IMPORT
+
 
 import Tracker from './Tracker';
 import Report from './Report';
@@ -45,15 +54,21 @@ function App() {
           <Layout>
             <Routes>
               {/* --- MAIN ENTRY POINT --- */}
-              {/* The root path now uses HomeRedirect to check user type and send them to the correct dashboard. */}
               <Route path="/" element={<HomeRedirect />} />
               
               {/* --- DASHBOARDS --- */}
-              {/* Patient Dashboard (The existing Dashboard component, now on a dedicated path) */}
               <Route path="/patient-dashboard" element={<PatientDashboard />} />
-              {/* Therapist Dashboard (NEW, completely separate UI) */}
               <Route path="/therapist-dashboard" element={<TherapistDashboard />} />
               
+              {/* --- THERAPIST-ONLY ROUTES --- */}
+              <Route path="/therapist/monitoring" element={<TherapistPatientMonitoring />} /> 
+              <Route path="/therapist/library" element={<TherapistExerciseLibrary />} />
+              <Route path="/therapist/protocols" element={<TherapistProtocolManager />} />
+              <Route path="/therapist/notifications" element={<TherapistNotificationLog />} />
+              <Route path="/therapist/analytics" element={<TherapistAnalytics />} />
+              <Route path="/therapist/session-review/:sessionId" element={<SessionReviewScreen onClose={() => { /* Mock close logic */ }} sessionId="MOCK_ID_123" />} /> {/* NEW ROUTE */}
+
+
               {/* --- Other Main Pages --- */}
               <Route path="/track" element={<Tracker />} />
               <Route path="/report" element={<Report />} />
@@ -76,10 +91,8 @@ function App() {
               <Route path="/programs/my-programs" element={<Pages.MyPrograms />} />
               <Route path="/programs/custom" element={<Pages.CustomProgram />} />
 
-              {/* --- ANALYTICS ROUTES --- */}
-              {/* 1. Daily Report (Accuracy Graphs) */}
+              {/* --- ANALYTICS ROUTES (Existing Patient Routes) --- */}
               <Route path="/analytics/accuracy" element={<Analytics />} />
-              {/* 2. AI Recovery (Prediction & Risk) */}
               <Route path="/analytics/risk" element={<RiskPrediction />} />
 
               {/* --- Community --- */}
