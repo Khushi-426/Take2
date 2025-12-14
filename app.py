@@ -1,5 +1,5 @@
 """
-Flask application with API routes - OPTIMIZED & ACCURATE VERSION
+Flask application with API routes - OPTIMIZED & AGNOSTIC VERSION
 """
 from flask import Flask, Response, jsonify, request
 import cv2
@@ -20,21 +20,25 @@ from flask_bcrypt import Bcrypt
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from flask_mail import Mail, Message
-# [Change] Import SocketIO
 from flask_socketio import SocketIO, emit 
+
 
 # --- IMPORT CUSTOM AI MODULE (CRITICAL FOR ACCURACY) ---
 from ai_engine import AIEngine
 
+
 # --- 0. CONFIGURATION ---
 load_dotenv()
+
 
 app = Flask(__name__)
 CORS(app)
 bcrypt = Bcrypt(app)
 
+
 # [Change] Initialize SocketIO with async_mode to ensure non-blocking behavior
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
 
 # --- 1. MAIL CONFIGURATION ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -44,16 +48,18 @@ app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
 mail = Mail(app)
 
+
 # --- 2. DATABASE SETUP ---
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "physiocheck_db"
+
 
 try:
     client = MongoClient(
         MONGO_URI, 
         serverSelectionTimeoutMS=5000, 
         tls=True,
-        tlsCAFile=certifi.where(),       
+        tlsCAFile=certifi.where(),      
         tlsAllowInvalidCertificates=True 
     )
     client.admin.command('ping') 
@@ -69,14 +75,18 @@ except Exception as e:
     otp_collection = None
     sessions_collection = None
 
+
 # Global session instance
 workout_session = None
 
-def init_session():
+
+# [Change] Modified to accept exercise_name
+def init_session(exercise_name="Bicep Curl"): 
     """Initialize workout session logic"""
     global workout_session
     from workout_session import WorkoutSession
-    workout_session = WorkoutSession()
+    # Pass the exercise name to WorkoutSession
+    workout_session = WorkoutSession(exercise_name) 
 
 def generate_video_frames():
     """Generator for video streaming & WebSocket Data Push"""
@@ -95,23 +105,28 @@ def generate_video_frames():
         socketio.emit('workout_update', workout_session.get_state_dict())
         socketio.sleep(0.01) # Yield control for 10ms
 
+
         # Encode frame
         ret, buffer = cv2.imencode('.jpg', frame)
         if ret:
             yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
 
 # --- 3. SOCKET EVENTS (NEW) ---
+
 
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
 
+
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
 
-# [Change] Socket-based Stop command (More reliable than HTTP during streaming)
+
+# [Change] Socket-based Stop command 
 @socketio.on('stop_session')
 def handle_stop_session(data):
     print("Received stop command via Socket")
@@ -147,7 +162,9 @@ def handle_stop_session(data):
     except Exception as e:
         print(f"Error stopping session: {e}")
 
+
 # --- 4. HTTP ROUTES ---
+
 
 @app.route('/api/auth/send-otp', methods=['POST'])
 def send_otp():
@@ -166,6 +183,7 @@ def send_otp():
     except Exception as e:
         return jsonify({'error': 'Failed to send email.'}), 500
 
+
 @app.route('/api/auth/signup-verify', methods=['POST'])
 def signup_verify():
     if users_collection is None: return jsonify({'error': 'Database unavailable'}), 503
@@ -179,6 +197,7 @@ def signup_verify():
     otp_collection.delete_one({'email': data['email']}) 
     return jsonify({'message': 'User verified', 'user': {'name': user['name'], 'role': user['role']}}), 201
 
+
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     if users_collection is None: return jsonify({'error': 'Database unavailable'}), 503
@@ -187,6 +206,7 @@ def login():
     if user and bcrypt.check_password_hash(user['password'], data['password']):
         return jsonify({'message': 'Login successful', 'role': user['role'], 'name': user['name'], 'email': user['email']}), 200
     return jsonify({'error': 'Invalid credentials'}), 401
+
 
 @app.route('/api/auth/google', methods=['POST'])
 def google_auth():
@@ -205,6 +225,7 @@ def google_auth():
     except Exception as e:
         return jsonify({'error': 'Authentication failed'}), 500
 
+
 @app.route('/api/user/stats', methods=['POST'])
 def get_user_stats():
     if sessions_collection is None: return jsonify({'error': 'DB Error'}), 503
@@ -215,10 +236,12 @@ def get_user_stats():
     if total_reps > 0: accuracy = max(0, 100 - int((sum(s.get('total_errors', 0) for s in user_sessions) / total_reps) * 20))
     return jsonify({'total_workouts': len(user_sessions), 'total_reps': total_reps, 'accuracy': accuracy, 'graph_data': [{'date': s.get('date'), 'reps': s.get('total_reps', 0)} for s in user_sessions[-7:]]})
 
+
 @app.route('/api/user/analytics_detailed', methods=['POST'])
 def get_analytics_detailed():
     if sessions_collection is None: return jsonify({'error': 'DB Error'}), 503
     return jsonify(AIEngine.get_detailed_analytics(list(sessions_collection.find({'email': request.json.get('email')}).sort('timestamp', 1))))
+
 
 @app.route('/api/user/ai_prediction', methods=['POST'])
 def get_ai_prediction():
@@ -226,18 +249,34 @@ def get_ai_prediction():
     sessions = list(sessions_collection.find({'email': request.json.get('email')}).sort('timestamp', 1))
     return jsonify(AIEngine.get_recovery_prediction(sessions) if sessions else {'error': 'No data'})
 
-@app.route('/start_tracking')
+
+@app.route('/start_tracking', methods=['GET', 'POST']) # << CRITICAL FIX: Allow both GET (for compatibility) and POST (for exercise selection)
 def start_tracking():
     global workout_session
+    
+    exercise_name = 'Bicep Curl' # Default exercise
+    
+    # Try to get exercise name from JSON body if it's a POST request
+    if request.method == 'POST':
+        try:
+            exercise_name = request.json.get('exercise', 'Bicep Curl')
+        except:
+            # If JSON is invalid or missing, stick with default
+            pass
+    
     if workout_session:
         try: workout_session.stop()
         except: pass
     try:
-        init_session()
+        # Pass the specific exercise name to initialization
+        init_session(exercise_name=exercise_name) 
         workout_session.start()
-        return jsonify({'status': 'success', 'message': 'Session started'})
+        return jsonify({'status': 'success', 'message': f'Session started for {exercise_name}'}), 200
     except Exception as e:
+        # Log the full exception for debugging
+        print(f"Exception during start_tracking: {e}")
         return jsonify({'status': 'error', 'message': f'Failed to start: {e}'}), 500
+
 
 # Keep this for backward compatibility, but we use Socket for stopping now
 @app.route('/stop_tracking', methods=['POST'])
@@ -250,16 +289,20 @@ def stop_tracking_http():
     except Exception as e:
         return jsonify({'status': 'error'}), 500
 
+
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_video_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 
 @app.route('/report_data')
 def report_data():
     if workout_session: return jsonify(workout_session.get_final_report())
     return jsonify({'error': 'No session data available'})
 
+
 if __name__ == '__main__':
+    # Initial session setup (using default name)
     init_session()
     # [Critical] Use socketio.run
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
