@@ -1,50 +1,38 @@
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
-const SYSTEM_PROMPT = `
-You are PhysioBot, an intelligent physiotherapy coach.
-
-Rules:
-- If recalibration intent → return: ACTION: RECALIBRATE
-- If stop intent → return: ACTION: STOP
-- If stats intent → return: ACTION: STATS
-- Otherwise respond naturally, max 20 words, motivational and exercise-aware.
-`;
-
 export const fetchAICommentary = async (context, userQuery, history = []) => {
-  if (!API_KEY) return 'AI key missing.';
-
-  const historyText = history
-    .map((m) => `${m.role.toUpperCase()}: ${m.text}`)
-    .join('\n');
-
-  const prompt = `
-${SYSTEM_PROMPT}
-
-CONTEXT:
-${JSON.stringify(context)}
-
-CHAT:
-${historyText}
-
-USER:
-${userQuery}
-`;
-
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      }
-    );
+    // 1. Determine the correct backend URL dynamically
+    // If the app is running on the same machine, use the current hostname
+    const hostname = window.location.hostname; 
+    
+    // Default to port 5000 (Flask), but allow it to be dynamic if needed
+    const backendUrl = `http://${hostname}:5000/api/ai_coach`;
+
+    console.log(`📡 Connecting to: ${backendUrl}`);
+
+    const res = await fetch(backendUrl, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        context: context,
+        query: userQuery,
+        history: history
+      })
+    });
+
+    if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Server Error:", errorText);
+        return `Server Error (${res.status}): Please check backend logs.`;
+    }
 
     const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Okay.';
-  } catch {
-    return 'Network error.';
+    return data.response || 'I heard you, but I have no answer.';
+    
+  } catch (error) {
+    console.error("Network Error:", error);
+    return `Connection Failed: Is the backend running on port 5000?`;
   }
 };

@@ -39,18 +39,19 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
     
     const recognitionRef = useRef(null);
     const isListeningForWakeWord = useRef(true);
+    const isBotSpeaking = useRef(false); // [FIX] New Flag to ignore self-voice
     const lastGestureRef = useRef(null);
     const listenTimeoutRef = useRef(null);
     const lastFeedbackRef = useRef("");
     const lastRepTotalRef = useRef(0);
 
-    // --- 1. TTS LOGIC (Preserved) ---
+    // --- 1. SEAMLESS TTS LOGIC (FIXED) ---
     const speak = (text, onEndCallback = null) => {
         if (!window.speechSynthesis) return;
         
-        if (recognitionRef.current) {
-            try { recognitionRef.current.stop(); } catch(e) {}
-        }
+        // [FIX] DO NOT STOP RECOGNITION HERE
+        // Instead, mark that bot is speaking so we can ignore its voice in onResult
+        isBotSpeaking.current = true;
 
         window.speechSynthesis.cancel();
         setBotState('SPEAKING');
@@ -59,16 +60,18 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         utterance.rate = 1.1; 
         
         utterance.onend = () => {
-            setBotState('IDLE');
-            // Restart Mic
-            if (active && !micError) {
-                try { recognitionRef.current?.start(); } catch(e) {}
-            }
+            isBotSpeaking.current = false; // [FIX] Bot finished speaking
+
+            // Only reset state if we are technically still "speaking" visually
+            setBotState(prevState => {
+                if (prevState === 'SPEAKING') return 'IDLE';
+                return prevState;
+            });
 
             if (onEndCallback) {
                 onEndCallback();
             } else {
-                // If listening for silence timeout, don't switch back to wake word yet
+                // If not waiting for a specific answer, return to Wake Word mode
                 if (!listenTimeoutRef.current) {
                     isListeningForWakeWord.current = true;
                 }
@@ -76,26 +79,27 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         };
         
         utterance.onerror = () => {
+            isBotSpeaking.current = false;
             setBotState('IDLE');
-            try { recognitionRef.current?.start(); } catch(e) {}
         };
 
         window.speechSynthesis.speak(utterance);
     };
 
-    // --- 2. MODES (Preserved 7s Timer) ---
+    // --- 2. ACTIVATION MODES ---
     const activateListeningMode = () => {
-        if (!isListeningForWakeWord.current) return;
-        
-        console.log("🎤 Listening Mode ON");
+        // [FIX] Allow re-triggering even if already false, to reset timer
+        console.log("🎤 Listening Mode ACTIVATED");
         isListeningForWakeWord.current = false;
-        if (onListeningChange) onListeningChange(true); // Pause Dots
+        if (onListeningChange) onListeningChange(true); 
         
         setBotState('LISTENING');
         setMessage("Listening...");
         
         speak("Yes?", () => {
-             startSilenceTimer(); // Start 7s Timer
+             // Force visual state back to listening after saying "Yes?"
+             setBotState('LISTENING');
+             startSilenceTimer(); 
         });
     };
 
@@ -106,7 +110,7 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         
         isListeningForWakeWord.current = true;
         setBotState('IDLE');
-        if (onListeningChange) onListeningChange(false); // Resume Dots
+        if (onListeningChange) onListeningChange(false); 
     };
 
     const startSilenceTimer = () => {
@@ -118,7 +122,7 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         }, 7000); 
     };
 
-    // --- 3. SPEECH RECOGNITION (Improved) ---
+    // --- 3. ROBUST SPEECH RECOGNITION ---
     useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -132,16 +136,28 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         recognition.interimResults = false;
         recognition.lang = 'en-US';
 
-        recognition.onstart = () => setMicError(false);
+        recognition.onstart = () => {
+            console.log("Status: Mic Started");
+            setMicError(false);
+        };
+
         recognition.onerror = (e) => {
             if (e.error === 'not-allowed') {
                 setMicError(true);
                 setBotState('ERROR');
                 setMessage("Mic Access Denied");
+            } else {
+                console.log("Mic Error:", e.error);
             }
         };
 
         recognition.onresult = async (event) => {
+            // [FIX] If the bot is currently talking, ignore any input (Echo Cancellation)
+            if (isBotSpeaking.current) {
+                console.log("Ignored input while speaking.");
+                return;
+            }
+
             const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
             console.log("Heard:", transcript);
 
@@ -150,7 +166,7 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
                 if (listenTimeoutRef.current) clearTimeout(listenTimeoutRef.current);
             }
 
-            // A. FAST LOCAL CHECK (Expanded Keywords)
+            // A. FAST LOCAL CHECK
             if (isStopCommand(transcript)) { 
                 await executeCommand("stop", "Stopping session."); 
                 return; 
@@ -163,28 +179,27 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
             // B. WAKE WORD CHECK
             if (isListeningForWakeWord.current) {
                 if (transcript.includes("madona") || transcript.includes("madonna") || transcript.includes("hey bot")) {
-                    // Check for combined command ("Hey Madona recalibrate")
-                    if (isRecalibrateCommand(transcript)) {
-                        await executeCommand("recalibrate", "Recalibrating now.");
-                    } else if (isStopCommand(transcript)) {
-                        await executeCommand("stop", "Stopping session.");
-                    } else {
-                        activateListeningMode();
-                    }
+                    activateListeningMode();
                 }
             } 
-            // C. ACTIVE LISTENING (Process via Gemini)
+            // C. ACTIVE LISTENING (Gemini)
             else {
                 await processSmartQuery(transcript);
             }
         };
 
+        // [FIX] Aggressive Keep-Alive
         recognition.onend = () => {
-            if(active && !micError) try { recognition.start(); } catch(e){}
+            console.log("Mic stopped. Restarting...");
+            if(active && !micError) {
+                try { recognition.start(); } catch(e){ console.log("Restart failed", e); }
+            }
         };
 
         recognitionRef.current = recognition;
-        if (active) recognition.start();
+        if (active) {
+            try { recognition.start(); } catch(e){}
+        }
 
         return () => { 
             if (recognitionRef.current) recognitionRef.current.stop(); 
@@ -192,15 +207,15 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         };
     }, [active]);
 
-    // --- 4. GESTURE (Preserved) ---
+    // --- 4. GESTURE TRIGGER ---
     useEffect(() => {
         if (gesture === 'V_SIGN' && lastGestureRef.current !== 'V_SIGN') {
+            console.log("✌️ V-Sign Detected!");
             activateListeningMode();
         }
         lastGestureRef.current = gesture;
     }, [gesture]);
 
-    // --- HELPERS (More Flexible Keywords) ---
     const isRecalibrateCommand = (text) => 
         text.includes("calibrate") || text.includes("reset") || text.includes("restart") || 
         text.includes("setup") || text.includes("start over") || text.includes("fix");
@@ -213,8 +228,9 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
         speak(reply, () => deactivateListeningMode());
     };
 
-    // --- SMART QUERY (Uses Gemini) ---
+    // --- SMART QUERY ---
     const processSmartQuery = async (text) => {
+        console.log("🧠 Processing Smart Query:", text);
         setBotState('THINKING');
         
         // Local Shortcuts
@@ -225,28 +241,34 @@ const AICoach = ({ data, feedback, exerciseName, active, gesture, onCommand, onL
             return;
         }
 
-        // Call Gemini
-        const context = { exercise: exerciseName, reps: (data?.LEFT?.rep_count || 0) + (data?.RIGHT?.rep_count || 0) };
-        const aiResponse = await fetchAICommentary(context, text);
-        
-        // Parse Action Codes from Gemini
-        if (aiResponse.includes("ACTION: RECALIBRATE")) {
-            executeCommand("recalibrate", "On it. Recalibrating.");
-        } else if (aiResponse.includes("ACTION: STOP")) {
-            executeCommand("stop", "Stopping session.");
-        } else if (aiResponse.includes("ACTION: STATS")) {
-            const r = data?.RIGHT?.rep_count || 0;
-            const l = data?.LEFT?.rep_count || 0;
-            speak(`Total reps: ${r+l}. ${r} Right, ${l} Left.`, () => deactivateListeningMode());
-        } else {
-            // Normal Chat
-            speak(aiResponse, () => deactivateListeningMode());
+        try {
+            const context = { exercise: exerciseName, reps: (data?.LEFT?.rep_count || 0) + (data?.RIGHT?.rep_count || 0) };
+            
+            // Call Backend
+            const aiResponse = await fetchAICommentary(context, text);
+            console.log("🤖 Received Response:", aiResponse);
+            
+            // Parse Action Codes
+            if (aiResponse.includes("ACTION: RECALIBRATE")) {
+                executeCommand("recalibrate", "On it. Recalibrating.");
+            } else if (aiResponse.includes("ACTION: STOP")) {
+                executeCommand("stop", "Stopping session.");
+            } else if (aiResponse.includes("ACTION: STATS")) {
+                const r = data?.RIGHT?.rep_count || 0;
+                const l = data?.LEFT?.rep_count || 0;
+                speak(`Total reps: ${r+l}.`, () => deactivateListeningMode());
+            } else {
+                speak(aiResponse, () => deactivateListeningMode());
+            }
+        } catch (error) {
+            console.error("AI Error:", error);
+            speak("I'm having trouble connecting.", () => deactivateListeningMode());
         }
     };
 
-    // --- 5. IDLE FEEDBACK (Preserved) ---
+    // --- 5. IDLE FEEDBACK ---
     useEffect(() => {
-        if (!active || botState !== 'IDLE' || !isListeningForWakeWord.current) return;
+        if (!active || botState !== 'IDLE' || !isListeningForWakeWord.current || isBotSpeaking.current) return;
 
         const currentReps = (data?.LEFT?.rep_count || 0) + (data?.RIGHT?.rep_count || 0);
         const currentFeedback = feedback;

@@ -1,6 +1,6 @@
 # workout_session.py
 """
-Main workout session manager - LISTENING MODE ADDED
+Main workout session manager - LISTENING MODE INTEGRATED
 """
 import cv2
 import mediapipe as mp
@@ -88,10 +88,15 @@ class WorkoutSession:
     
     def stop(self):
         from constants import WorkoutPhase
-        if self.cap: self.cap.release()
-        if self.holistic_model:
+        
+        # FIX: Explicit None checks to avoid ambiguity
+        if self.cap is not None: 
+            self.cap.release()
+            
+        if self.holistic_model is not None:
             self.holistic_model.close()
             self.holistic_model = None
+            
         self.phase = WorkoutPhase.INACTIVE
 
     # [NEW] Toggle Listening Mode
@@ -101,7 +106,10 @@ class WorkoutSession:
     def process_frame(self) -> Tuple[Optional[np.ndarray], bool]:
         from constants import WorkoutPhase
         
-        if not self.cap or not self.cap.isOpened(): return None, False
+        # FIX: Explicit None check for self.cap
+        if self.cap is None or not self.cap.isOpened(): 
+            return None, False
+            
         success, image = self.cap.read()
         if not success: return None, False
         
@@ -115,13 +123,11 @@ class WorkoutSession:
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
-        # [CRITICAL LOGIC CHANGE]
+        # [CRITICAL LOGIC]
         # If Listening Mode is ON: We skip workout logic and drawing landmarks.
-        # This makes the "Dots Stop" as requested.
         if self.listening_mode:
-            # We still flip it for the mirror effect
             image = cv2.flip(image, 1)
-            # Optional: Add visual indicator on the video feed itself
+            # Optional visual indicator
             cv2.putText(image, "LISTENING...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             return image, True
 
@@ -138,7 +144,7 @@ class WorkoutSession:
         elif self.phase == WorkoutPhase.ACTIVE:
             self._process_workout(results, current_time)
         
-        # 5. Draw Landmarks (Only if NOT listening - handled by early return above)
+        # 5. Draw Landmarks
         if results.pose_landmarks:
             mp.solutions.drawing_utils.draw_landmarks(
                 image, results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS)
@@ -224,7 +230,6 @@ class WorkoutSession:
             'status': self.phase.value,
             'remaining': self.countdown_remaining,
             'gesture': 'V_SIGN' if self.gesture_detected else None,
-            # [NEW] Pass listening state
             'listening': self.listening_mode,
             'calibration': {
                 'active': self.calibration_manager.data.active,

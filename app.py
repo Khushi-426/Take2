@@ -1,5 +1,5 @@
 """
-Flask application with API routes - LISTENING MODE INTEGRATED
+Flask application with API routes - LISTENING MODE & GEMINI 2.0 INTEGRATED
 """
 from flask import Flask, Response, jsonify, request
 import cv2
@@ -28,7 +28,8 @@ from ai_engine import AIEngine
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+# Allow CORS for all domains to prevent frontend connection issues
+CORS(app, resources={r"/*": {"origins": "*"}})
 bcrypt = Bcrypt(app)
 
 # Initialize SocketIO
@@ -106,7 +107,6 @@ def handle_connect():
 def handle_disconnect():
     print('Client disconnected')
 
-# [NEW] Toggle Listening Mode (Pauses Dots)
 @socketio.on('toggle_listening')
 def handle_toggle_listening(data):
     """
@@ -115,7 +115,6 @@ def handle_toggle_listening(data):
     data['active'] = False -> Resume Dots (Resume Analysis)
     """
     active = data.get('active', False)
-    # print(f"🎤 Listening Mode: {active}") 
     global workout_session
     if workout_session:
         workout_session.set_listening(active)
@@ -133,6 +132,8 @@ def handle_stop_session(data):
         report = workout_session.get_final_report()
         workout_session.stop()
         
+        # [CRITICAL FIX] Check if collection exists securely for PyMongo 4+
+        # This prevents the crash that was hiding your report!
         if user_email and sessions_collection is not None:
             right_summary = report['summary']['RIGHT']
             left_summary = report['summary']['LEFT']
@@ -234,6 +235,74 @@ def get_ai_prediction():
     sessions = list(sessions_collection.find({'email': request.json.get('email')}).sort('timestamp', 1))
     return jsonify(AIEngine.get_recovery_prediction(sessions) if sessions else {'error': 'No data'})
 
+# --- AI COACH ROUTE (GEMINI 2.0 - MATCHING YOUR DIAGNOSTIC) ---
+@app.route('/api/ai_coach', methods=['POST'])
+def ai_coach_chat():
+    """Handles chatbot logic using Gemini 2.0 models found in diagnostic"""
+    data = request.json
+    user_query = data.get('query', '')
+    context = data.get('context', {})
+    
+    # 1. Load Key
+    raw_key = os.getenv('GEMINI_API_KEY')
+    if not raw_key:
+        return jsonify({'response': 'System Error: Server API Key is missing.'}), 500
+    
+    api_key = raw_key.strip()
+    
+    system_prompt = """
+    You are PhysioBot, an intelligent physiotherapy coach.
+    Rules:
+    - If recalibration intent → return: ACTION: RECALIBRATE
+    - If stop intent → return: ACTION: STOP
+    - If stats intent → return: ACTION: STATS
+    - Otherwise respond naturally, max 20 words, motivational and exercise-aware.
+    """
+
+    full_prompt = f"""
+    {system_prompt}
+    CONTEXT: {json.dumps(context)}
+    USER QUERY: {user_query}
+    """
+    
+    payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
+    headers = {'Content-Type': 'application/json'}
+
+    # Use models confirmed by your diagnostic
+    models_to_try = [
+        "gemini-2.0-flash",       # Standard Fast
+        "gemini-2.5-flash",       # Newest
+        "gemini-2.0-flash-lite",  # Backup
+    ]
+
+    for model_name in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            
+            print(f"🤖 Connecting to {model_name}...")
+            response = requests.post(url, json=payload, headers=headers)
+            
+            if response.status_code == 200:
+                ai_text = response.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', 'Thinking...').strip()
+                print(f"✅ Success with {model_name}")
+                return jsonify({'response': ai_text})
+            
+            elif response.status_code == 404:
+                print(f"⚠️ {model_name} failed: 404 (Not Found)")
+                continue
+            else:
+                print(f"❌ {model_name} Error {response.status_code}: {response.text}")
+                continue
+
+        except Exception as e:
+            print(f"💥 Exception with {model_name}: {e}")
+            continue
+
+    print("🛑 ALL MODELS FAILED.")
+    return jsonify({'response': "I cannot access my brain right now. Please check server logs."})
+
+# --- WORKOUT ROUTES ---
+
 @app.route('/start_tracking')
 def start_tracking():
     global workout_session
@@ -261,6 +330,7 @@ def stop_tracking_http():
 def video_feed():
     return Response(generate_video_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+# [CRITICAL MISSING ROUTE RESTORED]
 @app.route('/report_data')
 def report_data():
     if workout_session: return jsonify(workout_session.get_final_report())
