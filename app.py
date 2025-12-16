@@ -361,6 +361,25 @@ def ai_prediction():
 
     return jsonify(prediction)
 
+@app.route("/api/ai_coach", methods=["POST"]) # <-- NEW ROUTE ADDED HERE
+def ai_coach_commentary():
+    """Handles real-time commentary from the AI Coach engine."""
+    data = request.get_json(silent=True) or {}
+    context = data.get("context")
+    query = data.get("query")
+    history = data.get("history", [])
+
+    if not context or not query:
+        return jsonify({"error": "Context and query are required"}), 400
+
+    try:
+        engine = AIEngine()
+        response = engine.generate_commentary(context, query, history)
+        return jsonify({"response": response}), 200
+    except Exception as e:
+        print(f"AI Coach Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # ----------------------------------------------------
 # 7. AUTH & OTHER ROUTES
 # ----------------------------------------------------
