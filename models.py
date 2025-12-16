@@ -5,6 +5,26 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 import time
 
+# --- NEW MODELS FOR GHOST POSE ---
+@dataclass
+class Landmark2D:
+    """Represents a normalized 2D coordinate (0.0 to 1.0)"""
+    x: float = 0.0
+    y: float = 0.0
+
+@dataclass
+class GhostPose:
+    """
+    Represents the target pose skeleton and instructions for the ghost model overlay.
+    Coordinates are normalized (0.0 to 1.0).
+    """
+    # Key is MediaPipe index (converted to string on output), value is normalized [x, y]
+    landmarks: Dict[int, Landmark2D] = field(default_factory=dict)
+    color: str = "GRAY" # Will be "GREEN", "RED", "YELLOW", or "GRAY"
+    instruction: str = "Calibrating..."
+    connections: List[tuple] = field(default_factory=list)
+
+
 @dataclass
 class ArmMetrics:
     """Stores all metrics for a single arm"""
@@ -16,7 +36,9 @@ class ArmMetrics:
     curr_rep_time: float = 0.0
     feedback: str = ""
     last_down_time: float = field(default_factory=time.time)
-    stage_start_time: float = field(default_factory=time.time)  # ADDED: Missing field
+    stage_start_time: float = field(default_factory=time.time)
+    # <<< NEW FIELD >>>
+    feedback_color: str = "GRAY" 
     
     def to_dict(self) -> dict:
         return {
@@ -26,7 +48,8 @@ class ArmMetrics:
             'rep_time': round(self.rep_time, 2),
             'min_rep_time': round(self.min_rep_time, 2),
             'curr_rep_time': round(self.curr_rep_time, 2),
-            'feedback': self.feedback
+            'feedback': self.feedback,
+            'feedback_color': self.feedback_color 
         }
 
 @dataclass

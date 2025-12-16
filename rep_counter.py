@@ -2,7 +2,8 @@
 Rep counting logic - MINUTE PRECISION, ZERO FALSE ALARMS
 """
 from collections import deque
-from constants import ArmStage
+# Update imports to include the new constants for validation
+from constants import ArmStage, REP_VALIDATION_RELIEF, REP_HYSTERESIS_MARGIN
 import time
 import random
 
@@ -34,22 +35,12 @@ class RepCounter:
             'LEFT': 0
         }
         
-        # Compliment System
-        self.last_rep_time = {
-            'RIGHT': 0,
-            'LEFT': 0
-        }
-        self.current_compliment = {
-            'RIGHT': "Maintain Form",
-            'LEFT': "Maintain Form"
-        }
-        self.compliments = [
-            "Looking Strong!", "Great Control!", "Perfect Form!", 
-            "Keep Pushing!", "Solid Rep!", "Nice Pace!"
-        ]
-        
-        # Hysteresis margins
-        self.hysteresis_margin = 5  # degrees
+        # Hysteresis margins (prevents flickering at thresholds)
+        # self.hysteresis_margin = 5  # degrees <--- OLD
+        self.hysteresis_margin = REP_HYSTERESIS_MARGIN # Use imported constant
+
+        # NEW: Store the Rep Validation Relief (the +/- 2 degree error space)
+        self.rep_validation_relief = REP_VALIDATION_RELIEF
 
     def process_rep(self, arm, angle, metrics, current_time, history):
         metrics.angle = angle
@@ -100,31 +91,60 @@ class RepCounter:
         )
 
     def _determine_target_state(self, angle, contracted, extended, current_stage):
+        """
+        Determine target state with hysteresis to prevent flickering
+        ENHANCED: Incorporates REP_VALIDATION_RELIEF (e.g., +/- 2 degrees) to relax 
+        the angle requirement for reaching a calibrated peak.
+        """
         margin = self.hysteresis_margin
-        
-        if angle <= contracted - margin:
+        relief = self.rep_validation_relief # +/- 2 degrees
+
+        # Apply the required +/- 2 degree error space to the calibrated thresholds
+        # Contracted is a low angle, so relief makes the threshold higher (easier to reach UP)
+        effective_contracted = contracted + relief
+        # Extended is a high angle, so relief makes the threshold lower (easier to reach DOWN)
+        effective_extended = extended - relief
+
+        # Fully contracted zone (with hysteresis)
+        if angle <= effective_contracted - margin:
             return ArmStage.UP.value
         
-        if angle >= extended + margin:
+        # Fully extended zone (with hysteresis)
+        if angle >= effective_extended + margin:
             return ArmStage.DOWN.value
         
+        # In the middle - use hysteresis based on current state (using effective thresholds)
         if current_stage == ArmStage.UP.value:
-            if angle < contracted + margin: return ArmStage.UP.value
-            else: return ArmStage.MOVING_DOWN.value
+            # Stick to UP until we clearly move past contracted threshold
+            if angle < effective_contracted + margin:
+                return ArmStage.UP.value
+            else:
+                return ArmStage.MOVING_DOWN.value
         
         elif current_stage == ArmStage.DOWN.value:
-            if angle > extended - margin: return ArmStage.DOWN.value
-            else: return ArmStage.MOVING_UP.value
+            # Stick to DOWN until we clearly move past extended threshold
+            if angle > effective_extended - margin:
+                return ArmStage.DOWN.value
+            else:
+                return ArmStage.MOVING_UP.value
         
         elif current_stage == ArmStage.MOVING_UP.value:
-            if angle <= contracted - margin: return ArmStage.UP.value
-            elif angle >= extended + margin: return ArmStage.DOWN.value
-            else: return ArmStage.MOVING_UP.value
+            # Continue moving up until we reach contracted zone
+            if angle <= effective_contracted - margin:
+                return ArmStage.UP.value
+            elif angle >= effective_extended + margin:
+                return ArmStage.DOWN.value  # Moved back down
+            else:
+                return ArmStage.MOVING_UP.value
         
         elif current_stage == ArmStage.MOVING_DOWN.value:
-            if angle >= extended + margin: return ArmStage.DOWN.value
-            elif angle <= contracted - margin: return ArmStage.UP.value
-            else: return ArmStage.MOVING_DOWN.value
+            # Continue moving down until we reach extended zone
+            if angle >= effective_extended + margin:
+                return ArmStage.DOWN.value
+            elif angle <= effective_contracted - margin:
+                return ArmStage.UP.value  # Moved back up
+            else:
+                return ArmStage.MOVING_DOWN.value
         
         return current_stage
 
@@ -160,41 +180,40 @@ class RepCounter:
     def _provide_form_feedback(self, angle, metrics, contracted, 
                                extended, arm, history, velocity, current_time):
         """
-        Feedback Philosophy:
-        1. SAFETY: Only warn if exceeding EXTREME physiological limits.
-        2. POSITIVITY: If moving well, show compliments.
-        3. CORRECTION: Only if STALLED in wrong place.
+        Provide form feedback based on angle and stage
+        ENHANCED: Range of Motion guidance uses the relaxed thresholds 
+        (effective_contracted/extended) to match the rep counting logic.
         """
+        safe_min = self.calibration.safe_angle_min
+        safe_max = self.calibration.safe_angle_max
+
+        # Apply the same relief to feedback thresholds for consistency
+        relief = self.rep_validation_relief
+        effective_contracted = contracted + relief
+        effective_extended = extended - relief
+        
         feedback_key = f"{arm.lower()}_feedback_count"
         
-        # 1. EXTREME SAFETY LIMITS (User requested minute level)
-        # 2 degrees = Practically touching shoulder
-        # 178 degrees = Dead straight arm
-        if angle > 178: 
+        # Critical form errors (Safety margins should NOT be relaxed)
+        if angle < safe_min:
+            metrics.feedback = "Over Curling"
+            setattr(history, feedback_key, getattr(history, feedback_key) + 1)
+        elif angle > safe_max:
             metrics.feedback = "Over Extending"
             setattr(history, feedback_key, getattr(history, feedback_key) + 1)
-            return
-
-        if angle < 2:
-            metrics.feedback = "Over Curling" 
-            setattr(history, feedback_key, getattr(history, feedback_key) + 1)
-            return
-
-        # 2. CHECK STALLING
-        # Velocity < 0.5 means user has stopped moving.
-        is_stalled = velocity < 0.5
-
-        if is_stalled:
-            # Only correct if they stopped SHORT of calibration
-            # (Allows 10 degree buffer)
-            if metrics.stage in [ArmStage.MOVING_UP.value, ArmStage.UP.value]:
-                if angle > contracted + 10: 
+        
+        # Range of motion guidance (using RELAXED thresholds)
+        elif effective_contracted < angle < effective_extended:
+            if metrics.stage == ArmStage.UP.value or metrics.stage == ArmStage.MOVING_UP.value:
+                # Use effective_contracted for comparison
+                if angle > effective_contracted + 10:  # Not quite at peak
                     metrics.feedback = "Curl Higher"
                     setattr(history, feedback_key, getattr(history, feedback_key) + 1)
                     return
             
-            elif metrics.stage in [ArmStage.MOVING_DOWN.value, ArmStage.DOWN.value]:
-                if angle < extended - 10:
+            elif metrics.stage == ArmStage.DOWN.value or metrics.stage == ArmStage.MOVING_DOWN.value:
+                # Use effective_extended for comparison
+                if angle < effective_extended - 10:  # Not quite at bottom
                     metrics.feedback = "Extend Fully"
                     setattr(history, feedback_key, getattr(history, feedback_key) + 1)
                     return

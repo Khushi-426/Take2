@@ -1,164 +1,307 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, CheckCircle, ArrowLeft } from 'lucide-react';
+import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Share2, Download, AlertTriangle } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import Confetti from "react-confetti";
+import { useAuth } from "./context/AuthContext";
+
+// --- UPDATED API URL (Must match Python Port 5001) ---
+const API_URL = "http://localhost:5001";
 
 const Report = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch('http://localhost:5000/report_data')
-      .then(res => res.json())
-      .then(json => {
-        setData(json);
+    const fetchReport = async () => {
+      try {
+        // Fetch from Python backend (Port 5001)
+        const res = await fetch(`${API_URL}/report_data`);
+        
+        if (!res.ok) {
+           throw new Error(`Server returned ${res.status}`);
+        }
+
+        const json = await res.json();
+        if (json.error) {
+           // Handle specific backend error message
+           setError(json.error);
+        } else {
+           setData(json);
+        }
+      } catch (err) {
+        console.error("Failed to fetch report data:", err);
+        setError("Could not load session report. Is the backend running?");
+      } finally {
         setLoading(false);
-      })
-      .catch(err => {
-        console.error(err);
-        setLoading(false);
-      });
+      }
+    };
+
+    // Small delay to ensure backend has finished processing stop_session
+    const timeout = setTimeout(fetchReport, 500);
+    return () => clearTimeout(timeout);
   }, []);
 
-  if (loading) return <div style={{height:'100vh', background:'var(--bg-color)', color:'var(--text-primary)', display:'flex', alignItems:'center', justifyContent:'center'}}>Generating Report...</div>;
-
-  if (!data || !data.summary) {
+  if (loading)
     return (
-        <div style={{height:'100vh', background:'var(--bg-color)', color:'var(--text-primary)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'20px'}}>
-            <h2>No Session Data Found</h2>
-            <p style={{color:'var(--text-secondary)'}}>The session data was lost or no workout was performed.</p>
-            <button 
-                onClick={() => navigate('/')} 
-                style={{padding:'12px 24px', background:'var(--primary-color)', color:'#fff', border:'none', borderRadius:'30px', cursor:'pointer', fontWeight:'bold', boxShadow: '0 5px 15px rgba(118, 176, 65, 0.4)'}}
-            >
-                Return to Dashboard
-            </button>
-        </div>
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#666",
+        }}
+      >
+        Generating Report...
+      </div>
     );
-  }
 
-  const { summary } = data;
-  const totalReps = summary.RIGHT.total_reps + summary.LEFT.total_reps;
+  if (error)
+    return (
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "20px",
+          color: "#D32F2F",
+        }}
+      >
+        <AlertTriangle size={48} />
+        <h2>{error}</h2>
+        <button
+          onClick={() => navigate("/track")}
+          style={{
+            padding: "10px 20px",
+            background: "#2C5D31",
+            color: "white",
+            border: "none",
+            borderRadius: "20px",
+            cursor: "pointer",
+          }}
+        >
+          Back to Tracker
+        </button>
+      </div>
+    );
 
-  // --- Recommendation Logic ---
-  const getRecommendations = () => {
-    const recs = [];
-    if (totalReps === 0) {
-      return [{ title: "Start Up", text: "No reps detected. Ensure you are visible in the frame next time.", color: "#aaa" }];
-    }
-
-    // Tempo
-    const rTime = summary.RIGHT.min_time;
-    const lTime = summary.LEFT.min_time;
-    if (rTime > 0 && lTime > 0) {
-        const ratio = Math.max(rTime, lTime) / Math.min(rTime, lTime);
-        if (ratio > 1.25) {
-            const slower = rTime > lTime ? 'RIGHT' : 'LEFT';
-            recs.push({ title: "Tempo Imbalance", text: `Your ${slower} arm is significantly slower. Try to match the speed of both arms.`, color: "#ff9800" });
-        } else if (rTime < 1.5) {
-            recs.push({ title: "Too Fast", text: "Slow down! Fast reps reduce muscle tension. Aim for 2-3 seconds per rep.", color: "#D32F2F" });
-        } else {
-            recs.push({ title: "Great Tempo", text: "Your repetition speed is consistent and controlled. Keep it up!", color: "var(--primary-color)" });
-        }
-    }
-
-    // Form
-    const rErr = summary.RIGHT.error_count;
-    const lErr = summary.LEFT.error_count;
-    if (rErr > 0 || lErr > 0) {
-        const side = rErr > lErr ? "RIGHT" : (lErr > rErr ? "LEFT" : "BOTH");
-        recs.push({ title: `Form Check (${side})`, text: `Detected ${rErr + lErr} form errors (Over-curl/Over-extend). Focus on stopping before locking out your elbows.`, color: "#D32F2F" });
-    } else {
-        recs.push({ title: "Perfect Form", text: "Zero form errors detected! Your technique is solid.", color: "var(--primary-color)" });
-    }
-
-    // Balance
-    const diff = Math.abs(summary.RIGHT.total_reps - summary.LEFT.total_reps);
-    if (diff > 2) {
-        recs.push({ title: "Muscle Imbalance", text: `You did ${diff} more reps on one side. Always finish your set with equal reps.`, color: "#ff9800" });
-    }
-
-    return recs;
-  };
-
-  const recommendations = getRecommendations();
-
-  // Animation Variants
-  const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.1 } } };
-  const item = { hidden: { y: 20, opacity: 0 }, show: { y: 0, opacity: 1 } };
+  // Prepare chart data
+  const chartData = [
+    { name: "Right", reps: data?.summary?.RIGHT?.total_reps || 0 },
+    { name: "Left", reps: data?.summary?.LEFT?.total_reps || 0 },
+  ];
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-color)', color: 'var(--text-primary)', padding: '40px', fontFamily: 'sans-serif' }}>
-      
-      <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px', borderBottom:'1px solid rgba(0,0,0,0.05)', paddingBottom:'20px' }}>
-            <div>
-                <h1 style={{ margin: 0, fontSize: '2.5rem', fontWeight: '800' }}>Session <span style={{color: 'var(--primary-color)'}}>Report</span></h1>
-                <p style={{ color: 'var(--text-secondary)', margin: '5px 0 0 0' }}>Duration: {data.duration} seconds</p>
+    <div style={{ background: "#F9F7F3", minHeight: "100vh", padding: "40px" }}>
+      <Confetti recycle={false} numberOfPieces={500} />
+
+      <div
+        style={{
+          maxWidth: "900px",
+          margin: "0 auto",
+          background: "#fff",
+          borderRadius: "30px",
+          padding: "40px",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.05)",
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "40px",
+          }}
+        >
+          <div>
+            <h1 style={{ fontSize: "2.5rem", color: "#1A3C34", margin: 0 }}>
+              Session Complete!
+            </h1>
+            <p style={{ color: "#666", marginTop: "10px" }}>
+              Great job on your {data?.exercise_name || "workout"} session.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate("/")}
+            style={{
+              background: "#F5F5F5",
+              border: "none",
+              padding: "12px 20px",
+              borderRadius: "20px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontWeight: "600",
+              color: "#555",
+            }}
+          >
+            <ArrowLeft size={18} /> Dashboard
+          </button>
+        </div>
+
+        {/* Stats Grid */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            gap: "20px",
+            marginBottom: "40px",
+          }}
+        >
+          <StatCard
+            label="Total Duration"
+            value={`${Math.floor(data?.duration || 0)}s`}
+            color="#E3F2FD"
+            textColor="#1565C0"
+          />
+          <StatCard
+            label="Total Reps"
+            value={
+              (data?.summary?.RIGHT?.total_reps || 0) +
+              (data?.summary?.LEFT?.total_reps || 0)
+            }
+            color="#E8F5E9"
+            textColor="#2E7D32"
+          />
+          <StatCard
+            label="Form Errors"
+            value={
+              (data?.summary?.RIGHT?.error_count || 0) +
+              (data?.summary?.LEFT?.error_count || 0)
+            }
+            color="#FFEBEE"
+            textColor="#C62828"
+          />
+        </div>
+
+        {/* Charts & Details */}
+        <div style={{ display: "flex", gap: "40px", flexWrap: "wrap" }}>
+          {/* Chart */}
+          <div style={{ flex: 1, minWidth: "300px", height: "300px" }}>
+            <h3 style={{ marginBottom: "20px", color: "#444" }}>
+              Symmetry Analysis
+            </h3>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                <YAxis axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: "10px",
+                    border: "none",
+                    boxShadow: "0 5px 15px rgba(0,0,0,0.1)",
+                  }}
+                />
+                <Bar dataKey="reps" fill="#2C5D31" radius={[10, 10, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Feedback */}
+          <div style={{ flex: 1, minWidth: "300px" }}>
+            <h3 style={{ marginBottom: "20px", color: "#444" }}>
+              AI Feedback
+            </h3>
+            <div
+              style={{
+                background: "#FAFAFA",
+                padding: "25px",
+                borderRadius: "20px",
+                border: "1px solid #eee",
+              }}
+            >
+              <h4 style={{ margin: "0 0 10px 0", color: "#333" }}>Right Arm</h4>
+              <p style={{ color: "#666", fontSize: "0.9rem", marginBottom: "20px" }}>
+                Completed {data?.summary?.RIGHT?.total_reps} reps with{" "}
+                {data?.summary?.RIGHT?.error_count} detected form corrections.
+              </p>
+
+              <h4 style={{ margin: "0 0 10px 0", color: "#333" }}>Left Arm</h4>
+              <p style={{ color: "#666", fontSize: "0.9rem" }}>
+                Completed {data?.summary?.LEFT?.total_reps} reps with{" "}
+                {data?.summary?.LEFT?.error_count} detected form corrections.
+              </p>
             </div>
-            <button onClick={() => navigate('/')} style={{ background:'white', border:'1px solid #eee', color:'var(--text-primary)', padding:'10px 20px', borderRadius:'30px', cursor:'pointer', display:'flex', alignItems:'center', gap:'10px', boxShadow: '0 5px 15px rgba(0,0,0,0.05)' }}>
-                <ArrowLeft size={18} /> Back to Dashboard
-            </button>
-        </header>
+          </div>
+        </div>
 
-        <motion.div variants={container} initial="hidden" animate="show" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '25px' }}>
-            
-            {/* Total Summary */}
-            <motion.div variants={item} style={{ background: 'var(--card-bg)', padding: '30px', borderRadius: '20px', textAlign: 'center', gridColumn: '1 / -1', boxShadow: '0 10px 30px rgba(0,0,0,0.03)' }}>
-                <div style={{ fontSize: '5rem', fontWeight: '900', color: 'var(--primary-color)', lineHeight: 1 }}>{totalReps}</div>
-                <div style={{ textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '2px', fontWeight: '600', marginTop: '10px' }}>Total Repetitions</div>
-            </motion.div>
-
-            {/* Right Arm Card */}
-            <motion.div variants={item} style={{ background: 'var(--card-bg)', padding: '30px', borderRadius: '20px', borderTop: '5px solid #D32F2F', boxShadow: '0 10px 30px rgba(0,0,0,0.03)' }}>
-                <h2 style={{ color: '#D32F2F', display: 'flex', alignItems: 'center', gap: '10px' }}>RIGHT ARM <Activity size={20}/></h2>
-                <div style={{ display: 'flex', justifyContent: 'space-between', margin: '20px 0', borderBottom: '1px solid #f0f0f0', paddingBottom: '15px' }}>
-                    <span style={{color: 'var(--text-secondary)'}}>Reps</span> <span style={{ fontWeight: 'bold', fontSize: '1.4rem' }}>{summary.RIGHT.total_reps}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', margin: '20px 0', borderBottom: '1px solid #f0f0f0', paddingBottom: '15px' }}>
-                    <span style={{color: 'var(--text-secondary)'}}>Best Time</span> <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>{summary.RIGHT.min_time.toFixed(2)}s</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{color: 'var(--text-secondary)'}}>Errors</span> <span style={{ fontWeight: 'bold', color: summary.RIGHT.error_count > 0 ? '#D32F2F' : 'var(--primary-color)' }}>{summary.RIGHT.error_count}</span>
-                </div>
-            </motion.div>
-
-            {/* Left Arm Card */}
-            <motion.div variants={item} style={{ background: 'var(--card-bg)', padding: '30px', borderRadius: '20px', borderTop: '5px solid var(--primary-color)', boxShadow: '0 10px 30px rgba(0,0,0,0.03)' }}>
-                <h2 style={{ color: 'var(--primary-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>LEFT ARM <Activity size={20}/></h2>
-                <div style={{ display: 'flex', justifyContent: 'space-between', margin: '20px 0', borderBottom: '1px solid #f0f0f0', paddingBottom: '15px' }}>
-                    <span style={{color: 'var(--text-secondary)'}}>Reps</span> <span style={{ fontWeight: 'bold', fontSize: '1.4rem' }}>{summary.LEFT.total_reps}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', margin: '20px 0', borderBottom: '1px solid #f0f0f0', paddingBottom: '15px' }}>
-                    <span style={{color: 'var(--text-secondary)'}}>Best Time</span> <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>{summary.LEFT.min_time.toFixed(2)}s</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{color: 'var(--text-secondary)'}}>Errors</span> <span style={{ fontWeight: 'bold', color: summary.LEFT.error_count > 0 ? '#D32F2F' : 'var(--primary-color)' }}>{summary.LEFT.error_count}</span>
-                </div>
-            </motion.div>
-
-            {/* Recommendations Panel */}
-            <motion.div variants={item} style={{ background: '#fff', padding: '30px', borderRadius: '20px', gridColumn: '1 / -1', marginTop: '20px', boxShadow: '0 10px 30px rgba(0,0,0,0.03)' }}>
-                <h3 style={{ borderBottom: '1px solid #f0f0f0', paddingBottom: '20px', marginBottom: '25px', color: 'var(--text-primary)' }}>AI Analysis & Recommendations</h3>
-                
-                {recommendations.length > 0 ? recommendations.map((rec, index) => (
-                    <div key={index} style={{ marginBottom: '25px', display: 'flex', gap: '15px' }}>
-                        <div style={{ paddingTop: '2px' }}>
-                           {rec.title.includes("Perfect") || rec.title.includes("Great") ? <CheckCircle color={rec.color} size={24} /> : <AlertTriangle color={rec.color} size={24} />}
-                        </div>
-                        <div>
-                            <h4 style={{ margin: '0 0 5px 0', color: rec.color, fontSize: '1.1rem' }}>{rec.title}</h4>
-                            <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '1rem', lineHeight: '1.5' }}>{rec.text}</p>
-                        </div>
-                    </div>
-                )) : <div style={{color:'var(--text-secondary)'}}>No specific recommendations available.</div>}
-            </motion.div>
-
-        </motion.div>
+        {/* Actions */}
+        <div
+          style={{
+            marginTop: "40px",
+            paddingTop: "30px",
+            borderTop: "1px solid #eee",
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: "15px",
+          }}
+        >
+          <button className="btn-secondary" style={btnStyle}>
+            <Share2 size={18} /> Share
+          </button>
+          <button className="btn-secondary" style={btnStyle}>
+            <Download size={18} /> Export PDF
+          </button>
+        </div>
       </div>
     </div>
   );
+};
+
+const StatCard = ({ label, value, color, textColor }) => (
+  <div
+    style={{
+      background: color,
+      padding: "25px",
+      borderRadius: "20px",
+      textAlign: "center",
+    }}
+  >
+    <div
+      style={{
+        fontSize: "0.9rem",
+        color: textColor,
+        fontWeight: "700",
+        marginBottom: "5px",
+        opacity: 0.8,
+      }}
+    >
+      {label}
+    </div>
+    <div style={{ fontSize: "2rem", fontWeight: "800", color: textColor }}>
+      {value}
+    </div>
+  </div>
+);
+
+const btnStyle = {
+  background: "#fff",
+  border: "1px solid #ddd",
+  padding: "12px 24px",
+  borderRadius: "30px",
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  fontWeight: "600",
+  color: "#555",
 };
 
 export default Report;
