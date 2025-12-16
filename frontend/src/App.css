@@ -40,3 +40,46 @@
 .read-the-docs {
   color: #888;
 }
+
+/* --- NEW STYLES FOR TRACKER COMPONENT --- */
+
+/* Container for the video stream and all overlays */
+.video-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Video/Image element for the stream */
+.video-feed {
+  width: 100%;
+  height: 100%;
+  display: block;
+  /* Flip the video for a mirror effect, which is what users expect */
+  transform: scaleX(-1);
+}
+
+/* Styles for the active feedback box */
+.active-feedback-box {
+  transition: all 0.3s ease;
+}
+
+.active-feedback-box.red {
+  border: 3px solid #d32f2f;
+  color: #d32f2f;
+}
+
+.active-feedback-box.green {
+  border: 3px solid #388e3c;
+  color: #388e3c;
+}
+
+.active-feedback-box.yellow {
+  border: 3px solid #fbc02d;
+  color: #fbc02d;
+}
+
+.active-feedback-box.gray {
+  border: 3px solid #616161;
+  color: #616161;
+}

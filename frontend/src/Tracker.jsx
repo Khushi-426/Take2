@@ -16,17 +16,18 @@ import {
   VolumeX,
   User,
   Loader,
-  RefreshCw // Added Refresh icon
+  RefreshCw,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "./context/AuthContext";
 import { io } from "socket.io-client";
 
+import GhostModelOverlay from "./components/GhostModelOverlay";
+
 // --- UTILITY: TTS ---
 const speak = (text) => {
   if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel(); // Prioritize new message
-
+  window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = 1.1;
   utterance.pitch = 1.0;
@@ -35,8 +36,7 @@ const speak = (text) => {
 };
 
 // --- API CONFIGURATION ---
-// CHANGED: Switched to localhost to resolve connection refused errors on some systems
-const API_URL = "http://localhost:5001"; 
+const API_URL = "http://127.0.0.1:5001";
 
 const Tracker = () => {
   const navigate = useNavigate();
@@ -48,9 +48,38 @@ const Tracker = () => {
   const [selectedExercise, setSelectedExercise] = useState(null);
 
   const [active, setActive] = useState(false);
-  const [isLoading, setIsLoading] = useState(false); 
-  const [fetchError, setFetchError] = useState(false); // New State for API Errors
-  const [data, setData] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
+
+  // <<< UPDATED DATA STATE >>>
+  const [data, setData] = useState({
+    RIGHT: {
+      feedback_color: "GRAY",
+      rep_count: 0,
+      stage: "DOWN",
+      angle: 0,
+      feedback: "",
+    },
+    LEFT: {
+      feedback_color: "GRAY",
+      rep_count: 0,
+      stage: "DOWN",
+      angle: 0,
+      feedback: "",
+    },
+    status: "INACTIVE",
+    calibration: { message: "Waiting for camera...", progress: 0 },
+    remaining: 0,
+    exercise_name: "",
+    tracked_joint_name: "",
+    ghost_pose: {
+      landmarks: {},
+      color: "GRAY",
+      instruction: "Initializing...",
+      connections: [],
+    },
+  });
+
   const [sessionTime, setSessionTime] = useState(0);
   const [feedback, setFeedback] = useState("Initializing...");
   const [videoTimestamp, setVideoTimestamp] = useState(Date.now());
@@ -62,14 +91,12 @@ const Tracker = () => {
 
   const [socket, setSocket] = useState(null);
   const timerRef = useRef(null);
-  const stopTimeoutRef = useRef(null); 
+  const stopTimeoutRef = useRef(null);
 
-  // Audio Ref to prevent repeats
   const lastSpokenRef = useRef("");
 
   // --- 1. SETUP SOCKET CONNECTION & FETCH EXERCISES ---
   useEffect(() => {
-    // UPDATED SOCKET URL
     const newSocket = io(API_URL);
     setSocket(newSocket);
 
@@ -79,8 +106,8 @@ const Tracker = () => {
     });
 
     newSocket.on("connect_error", (err) => {
-        console.error("Socket Connection Error:", err);
-        setConnectionStatus("DISCONNECTED");
+      console.error("Socket Connection Error:", err);
+      setConnectionStatus("DISCONNECTED");
     });
 
     newSocket.on("disconnect", () => {
@@ -123,7 +150,6 @@ const Tracker = () => {
     }
   };
 
-  // --- HELPER: SAFE EXIT ---
   const handleExitNavigation = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (stopTimeoutRef.current) clearTimeout(stopTimeoutRef.current);
@@ -157,19 +183,18 @@ const Tracker = () => {
     // ACTIVE
     else if (json.status === "ACTIVE") {
       setCountdownValue(null);
-      let msg = "MAINTAIN FORM";
-      let color = "#76B041"; // Green
+
+      // Use ghost_pose instruction as the primary guidance message
+      let msg = json.ghost_pose?.instruction || "MAINTAIN FORM";
       let alertMsg = "";
 
-      // Prioritize error feedback
+      // Overwrite primary message with error feedback if present
       if (json.RIGHT && json.RIGHT.feedback) {
         msg = `RIGHT: ${json.RIGHT.feedback}`;
         alertMsg = json.RIGHT.feedback;
-        color = "#D32F2F";
       } else if (json.LEFT && json.LEFT.feedback) {
         msg = `LEFT: ${json.LEFT.feedback}`;
         alertMsg = json.LEFT.feedback;
-        color = "#D32F2F";
       }
 
       setFeedback(msg);
@@ -178,10 +203,11 @@ const Tracker = () => {
         triggerSpeech(alertMsg);
       }
 
+      // Update feedback box class based on the right arm's color metrics
       const fbBox = document.getElementById("feedback-box");
-      if (fbBox) {
-        fbBox.style.color = color;
-        fbBox.style.borderColor = color;
+      const color = json.RIGHT?.feedback_color;
+      if (fbBox && color) {
+        fbBox.className = `active-feedback-box ${color.toLowerCase()}`;
       }
     }
   };
@@ -194,14 +220,14 @@ const Tracker = () => {
     }
   };
 
-  // --- SESSION CONTROL ---
+  // --- SESSION CONTROL (unchanged) ---
   const startSession = async () => {
     if (!selectedExercise) {
       alert("Please select an exercise first.");
       return;
     }
 
-    setIsLoading(true); 
+    setIsLoading(true);
     setConnectionStatus("CONNECTING");
 
     try {
@@ -228,13 +254,15 @@ const Tracker = () => {
           1000
         );
       } else {
-         throw new Error("Failed to start session");
+        throw new Error("Failed to start session");
       }
     } catch (e) {
-      alert("Could not connect to AI Server. Please ensure 'app.py' is running.");
+      alert(
+        "Could not connect to AI Server. Please ensure 'app.py' is running."
+      );
       console.error(e);
       setConnectionStatus("DISCONNECTED");
-      setViewMode("DEMO"); 
+      setViewMode("DEMO");
     } finally {
       setIsLoading(false);
     }
@@ -242,7 +270,7 @@ const Tracker = () => {
 
   const stopSession = () => {
     setActive(false);
-    
+
     if (socket && socket.connected) {
       socket.emit("stop_session", {
         email: user?.email,
@@ -252,10 +280,9 @@ const Tracker = () => {
       console.warn("Socket disconnected, forcing manual stop.");
     }
 
-    // Fallback Safety Timer
     stopTimeoutRef.current = setTimeout(() => {
-        console.log("Forcing navigation (timeout)");
-        handleExitNavigation();
+      console.log("Forcing navigation (timeout)");
+      handleExitNavigation();
     }, 1000);
   };
 
@@ -265,7 +292,7 @@ const Tracker = () => {
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // --- RENDER LIBRARY ---
+  // --- RENDER LIBRARY (unchanged) ---
   const renderLibrary = () => (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -329,28 +356,37 @@ const Tracker = () => {
         }}
       >
         {fetchError ? (
-             <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: "40px", color: "#D32F2F" }}>
-                <AlertCircle size={48} style={{ margin: "0 auto 20px" }} />
-                <h3>Cannot connect to AI Server</h3>
-                <p>Please ensure the Python backend (app.py) is running on port 5001.</p>
-                <button 
-                    onClick={fetchExercises}
-                    style={{
-                        marginTop: "20px",
-                        padding: "10px 25px",
-                        background: "#D32F2F",
-                        color: "white",
-                        border: "none",
-                        borderRadius: "20px",
-                        cursor: "pointer",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "8px"
-                    }}
-                >
-                    <RefreshCw size={16} /> Retry Connection
-                </button>
-             </div>
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              textAlign: "center",
+              padding: "40px",
+              color: "#D32F2F",
+            }}
+          >
+            <AlertCircle size={48} style={{ margin: "0 auto 20px" }} />
+            <h3>Cannot connect to AI Server</h3>
+            <p>
+              Please ensure the Python backend (app.py) is running on port 5001.
+            </p>
+            <button
+              onClick={fetchExercises}
+              style={{
+                marginTop: "20px",
+                padding: "10px 25px",
+                background: "#D32F2F",
+                color: "white",
+                border: "none",
+                borderRadius: "20px",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <RefreshCw size={16} /> Retry Connection
+            </button>
+          </div>
         ) : exercises.length === 0 ? (
           <p
             style={{ gridColumn: "1 / -1", textAlign: "center", color: "#888" }}
@@ -478,7 +514,7 @@ const Tracker = () => {
     </motion.div>
   );
 
-  // --- RENDER DEMO ---
+  // --- RENDER DEMO (unchanged) ---
   const renderDemo = () => {
     if (!selectedExercise) return null;
 
@@ -614,7 +650,14 @@ const Tracker = () => {
               }
               onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
             >
-              {isLoading ? "Connecting..." : <> <Play size={20} fill="currentColor" /> Start Session </>}
+              {isLoading ? (
+                "Connecting..."
+              ) : (
+                <>
+                  {" "}
+                  <Play size={20} fill="currentColor" /> Start Session{" "}
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -645,8 +688,14 @@ const Tracker = () => {
 
   // --- RENDER SESSION ---
   const renderSession = () => {
-    // Determine the joint name based on the live data (Hip, Knee, Elbow, etc.)
     const jointName = data?.tracked_joint_name || "JOINT";
+
+    // Determine the main feedback and color for the instruction box
+    const mainFeedback = data?.RIGHT.feedback || data?.LEFT.feedback;
+    const instructionText = mainFeedback
+      ? mainFeedback.replace("AI: ", "")
+      : data?.ghost_pose.instruction;
+    const feedbackColor = data?.RIGHT.feedback_color || "GRAY";
 
     return (
       <motion.div
@@ -729,15 +778,29 @@ const Tracker = () => {
           <div style={{ flex: 1, overflowY: "auto", padding: "25px" }}>
             {["RIGHT", "LEFT"].map((arm) => {
               const metrics = data ? data[arm] : null;
+              // Use feedback color to highlight the arm's status card
+              const cardColor =
+                metrics?.feedback_color === "RED"
+                  ? "#FFEBEE"
+                  : metrics?.feedback_color === "GREEN"
+                  ? "#E8F5E9"
+                  : "#f8f9fa";
+
               return (
                 <div
                   key={arm}
                   style={{
                     marginBottom: "25px",
-                    background: "#f8f9fa",
+                    background: cardColor,
                     borderRadius: "18px",
                     padding: "20px",
-                    border: "1px solid #eee",
+                    border:
+                      metrics?.feedback_color === "RED"
+                        ? "1px solid #D32F2F"
+                        : metrics?.feedback_color === "GREEN"
+                        ? "1px solid #69B341"
+                        : "1px solid #eee",
+                    transition: "all 0.2s",
                   }}
                 >
                   <h3
@@ -754,7 +817,14 @@ const Tracker = () => {
                   >
                     {/* Dynamic Joint Name Display */}
                     {arm} {jointName.toUpperCase()}
-                    <span style={{ color: "#2C5D31" }}>
+                    <span
+                      style={{
+                        color:
+                          metrics?.feedback_color === "RED"
+                            ? "#D32F2F"
+                            : "#2C5D31",
+                      }}
+                    >
                       {metrics ? metrics.stage : "--"}
                     </span>
                   </h3>
@@ -859,6 +929,7 @@ const Tracker = () => {
 
         {/* Camera Feed Area */}
         <div
+          className="video-container"
           style={{
             flex: 1,
             position: "relative",
@@ -871,15 +942,26 @@ const Tracker = () => {
         >
           <div style={{ width: "100%", height: "100%", position: "relative" }}>
             {active ? (
-              <img
-                src={`${API_URL}/video_feed?t=${videoTimestamp}`}
-                style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                alt="Stream"
-                onError={() => {
-                  setFeedback("Camera Stream Failed");
-                  setActive(false);
-                }}
-              />
+              <>
+                {/* 1. Video Stream */}
+                <img
+                  src={`${API_URL}/video_feed?t=${videoTimestamp}`}
+                  className="video-feed"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                  }}
+                  alt="Stream"
+                  onError={() => {
+                    setFeedback("Camera Stream Failed");
+                    setActive(false);
+                  }}
+                />
+
+                {/* 2. Ghost Model Overlay */}
+                <GhostModelOverlay ghostPoseData={data.ghost_pose} />
+              </>
             ) : (
               <div
                 style={{
@@ -890,17 +972,21 @@ const Tracker = () => {
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  gap: "20px"
+                  gap: "20px",
                 }}
               >
-                {isLoading ? <Loader className="spin-animation" size={48} /> : <AlertCircle size={48} />}
+                {isLoading ? (
+                  <Loader className="spin-animation" size={48} />
+                ) : (
+                  <AlertCircle size={48} />
+                )}
                 <div style={{ fontSize: "1.2rem", opacity: 0.8 }}>
-                   {isLoading ? "Starting Camera..." : "Initializing Camera..."}
+                  {isLoading ? "Starting Camera..." : "Initializing Camera..."}
                 </div>
               </div>
             )}
 
-            {/* REFERENCE SKELETON OVERLAY */}
+            {/* REFERENCE SKELETON OVERLAY (Calibration visual aid) */}
             {data?.status === "CALIBRATION" && (
               <div
                 style={{
@@ -917,6 +1003,7 @@ const Tracker = () => {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
+                  zIndex: 20,
                 }}
               >
                 <User size={120} color="rgba(255,255,255,0.5)" />
@@ -937,7 +1024,7 @@ const Tracker = () => {
 
             {/* OVERLAYS */}
             <AnimatePresence>
-              {/* 1. CALIBRATION OVERLAY */}
+              {/* 1. CALIBRATION OVERLAY (unchanged) */}
               {data?.status === "CALIBRATION" && (
                 <motion.div
                   initial={{ opacity: 0 }}
@@ -946,12 +1033,13 @@ const Tracker = () => {
                   style={{
                     position: "absolute",
                     inset: 0,
-                    background: "rgba(0,0,0,0.1)", 
+                    background: "rgba(0,0,0,0.1)",
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
                     justifyContent: "flex-start",
                     paddingTop: "50px",
+                    zIndex: 30,
                   }}
                 >
                   <h2
@@ -981,7 +1069,7 @@ const Tracker = () => {
                 </motion.div>
               )}
 
-              {/* 2. COUNTDOWN OVERLAY */}
+              {/* 2. COUNTDOWN OVERLAY (unchanged) */}
               {data?.status === "COUNTDOWN" && (
                 <motion.div
                   initial={{ scale: 0.5, opacity: 0 }}
@@ -995,6 +1083,7 @@ const Tracker = () => {
                     alignItems: "center",
                     justifyContent: "center",
                     background: "rgba(0,0,0,0.2)",
+                    zIndex: 30,
                   }}
                 >
                   <div
@@ -1010,12 +1099,13 @@ const Tracker = () => {
                 </motion.div>
               )}
 
-              {/* 3. ACTIVE FEEDBACK BOX */}
+              {/* 3. ACTIVE FEEDBACK BOX (Updated to use class) */}
               {data?.status === "ACTIVE" && (
                 <motion.div
                   initial={{ y: 50, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   id="feedback-box"
+                  className={`active-feedback-box ${feedbackColor.toLowerCase()}`}
                   style={{
                     position: "absolute",
                     bottom: "50px",
@@ -1031,9 +1121,15 @@ const Tracker = () => {
                     boxShadow: "0 20px 40px rgba(0,0,0,0.3)",
                     backdropFilter: "blur(10px)",
                     transition: "all 0.3s ease",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    zIndex: 30,
                   }}
                 >
-                  {feedback.includes("MAINTAIN") ? (
+                  {feedback.includes("MAINTAIN") ||
+                  feedback.includes("Up") ||
+                  feedback.includes("Down") ? (
                     <CheckCircle size={28} />
                   ) : (
                     <AlertCircle size={28} />
