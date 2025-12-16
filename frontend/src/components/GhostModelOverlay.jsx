@@ -1,54 +1,167 @@
 import React, { useRef, useEffect, useMemo } from "react";
 
-// Enhanced color palette with gradients
+// Enhanced color palette
 const GHOST_COLORS = {
+  // Red for high risk/bad form (Error, high energy/particle emission)
   RED: {
-    primary: "rgba(255, 82, 82, 0.9)",
-    secondary: "rgba(255, 120, 120, 0.6)",
-    glow: "rgba(255, 82, 82, 0.7)",
+    primary: "rgba(255, 69, 58, 1.0)",
+    glow: "rgba(255, 69, 58, 0.9)",
   },
+  // Green for perfect form (Optimal, low energy/particle emission)
   GREEN: {
-    primary: "rgba(52, 211, 153, 0.9)",
-    secondary: "rgba(110, 231, 183, 0.6)",
-    glow: "rgba(52, 211, 153, 0.7)",
+    primary: "rgba(52, 211, 153, 1.0)",
+    glow: "rgba(52, 211, 153, 0.9)",
   },
+  // Yellow for movement/transition
   YELLOW: {
-    primary: "rgba(251, 191, 36, 0.9)",
-    secondary: "rgba(252, 211, 77, 0.6)",
-    glow: "rgba(251, 191, 36, 0.7)",
+    primary: "rgba(251, 191, 36, 1.0)",
+    glow: "rgba(251, 191, 36, 0.9)",
   },
   GRAY: {
-    primary: "rgba(156, 163, 175, 0.8)",
-    secondary: "rgba(209, 213, 219, 0.5)",
-    glow: "rgba(156, 163, 175, 0.6)",
+    primary: "rgba(156, 163, 175, 0.9)",
+    glow: "rgba(156, 163, 175, 0.7)",
   },
 };
+
+// Define the peripheral path for the full-body outline (silhouette)
+const BODY_OUTLINE_PATH = [
+  16, // Right Wrist (R_W)
+  14, // Right Elbow (R_E)
+  12, // Right Shoulder (R_S)
+  11, // Left Shoulder (L_S)
+  13, // Left Elbow (L_E)
+  15, // Left Wrist (L_W)
+  23, // Left Hip (L_H)
+  25, // Left Knee (L_K)
+  27, // Left Ankle (L_A)
+  28, // Right Ankle (R_A) - connect ankles
+  26, // Right Knee (R_K)
+  24, // Right Hip (R_H)
+  12, // Close loop back to Right Shoulder (R_S)
+];
+
+// Define the standard connections for the full skeleton
+const POSE_CONNECTIONS = [
+  // Torso & Shoulders
+  [12, 11], // Shoulders
+  [11, 23], // Left Torso side
+  [12, 24], // Right Torso side
+  [23, 24], // Hips
+
+  // Left Arm
+  [11, 13],
+  [13, 15],
+
+  // Right Arm
+  [12, 14],
+  [14, 16],
+
+  // Left Leg
+  [23, 25],
+  [25, 27],
+
+  // Right Leg
+  [24, 26],
+  [26, 28],
+
+  // Head/Face
+  [0, 1],
+  [0, 4],
+];
+
+// --- Constants for Motion Trail Data ---
+const TRAIL_LENGTH = 8;
+const SMOOTHING_FACTOR = 0.2; // Value for fluid motion
 
 const GhostModelOverlay = ({ ghostPoseData }) => {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const pulsePhaseRef = useRef(0);
+  // Ref to hold the position of the ghost after smoothing
+  const smoothedLandmarksRef = useRef(null);
+  // FIX: Encapsulate trail data within the component instance using useRef
+  const trailDataRef = useRef(
+    new Array(TRAIL_LENGTH)
+      .fill(null)
+      .map(() => ({ landmarks: null, color: null, timestamp: 0 }))
+  );
 
   // Memoize color scheme for drawing
   const colorScheme = useMemo(
     () =>
-      GHOST_COLORS[ghostPoseData?.color?.toUpperCase()] || GUEST_COLORS.GRAY,
+      GHOST_COLORS[ghostPoseData?.color?.toUpperCase()] || GHOST_COLORS.GRAY,
     [ghostPoseData?.color]
   );
+
+  // --- UI Style Objects for improved readability ---
+
+  const canvasStyle = {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    zIndex: 15,
+    pointerEvents: "none",
+    // Filter for the 'wow factor' bloom/glow
+    filter: `
+      blur(0.5px) 
+      drop-shadow(0 0 10px ${colorScheme.glow}) 
+      saturate(150%)
+    `,
+    backgroundColor: "transparent",
+    mixBlendMode: "screen",
+  };
+
+  const legendContainerStyle = {
+    position: "absolute",
+    top: "20px",
+    right: "20px",
+    background:
+      "linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(31, 41, 55, 0.95))",
+    padding: "16px 20px",
+    borderRadius: "14px",
+    zIndex: 20,
+    color: "white",
+    fontSize: "0.85rem",
+    fontWeight: "600",
+    backdropFilter: "blur(15px)",
+    border: "1px solid rgba(255, 255, 255, 0.1)",
+    boxShadow: "0 4px 20px rgba(0, 0, 0, 0.3)",
+  };
+
+  const instructionBannerStyle = ghostPoseData?.instruction
+    ? {
+        position: "absolute",
+        bottom: "100px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: colorScheme.primary,
+        padding: "14px 32px",
+        borderRadius: "40px",
+        fontSize: "1.05rem",
+        fontWeight: "800",
+        color: "white",
+        whiteSpace: "nowrap",
+        boxShadow: `0 6px 24px ${colorScheme.glow}, 0 0 0 1px rgba(255, 255, 255, 0.2) inset`,
+        backdropFilter: "blur(8px)",
+        zIndex: 25,
+        letterSpacing: "0.5px",
+        textTransform: "uppercase",
+        animation: "floatSmooth 2.5s ease-in-out infinite",
+      }
+    : {};
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const container = canvas.parentElement;
-
-    // Use requestAnimationFrame for optimal timing and smoothness.
-    // We remove manual throttling to achieve max FPS (usually 60+)
+    const trailData = trailDataRef.current; // Get the mutable ref content
 
     let containerWidth = container.clientWidth;
     let containerHeight = container.clientHeight;
 
-    // Set dimensions based on current container size
     const setCanvasDimensions = () => {
       containerWidth = container.clientWidth;
       containerHeight = container.clientHeight;
@@ -60,141 +173,253 @@ const GhostModelOverlay = ({ ghostPoseData }) => {
 
     const ctx = canvas.getContext("2d", {
       alpha: true,
-      desynchronized: true, // Low-latency rendering
+      desynchronized: true,
     });
 
-    // IMPROVEMENT: Draw all skeleton segments with a gradient for a volumetric look
-    const drawSkeletonWithGradient = (connections, primaryColor, glowColor) => {
+    // Initialize smoothed landmarks on first run
+    if (!smoothedLandmarksRef.current && ghostPoseData.landmarks) {
+      smoothedLandmarksRef.current = { ...ghostPoseData.landmarks };
+    }
+
+    /**
+     * Draws a path defined by a sequence of landmarks (used for the body outline/trail).
+     */
+    const drawPathSegment = (
+      landmarks,
+      color,
+      alpha,
+      lineWidth,
+      blur,
+      time
+    ) => {
       ctx.save();
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      ctx.lineWidth = 10;
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = 0; // Handled by outer glow layer
 
-      connections.forEach(([startIdx, endIdx]) => {
-        const start = ghostPoseData.landmarks[String(startIdx)];
-        const end = ghostPoseData.landmarks[String(endIdx)];
+      // SIMPLIFIED SHIMMER: Use a global shimmer magnitude
+      const globalShimmer = Math.sin(time * 0.5) * 1.5;
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.globalAlpha = alpha;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = blur;
+
+      ctx.beginPath();
+      let firstPoint = true;
+
+      BODY_OUTLINE_PATH.forEach((idx) => {
+        const landmark = landmarks[String(idx)];
+        if (!landmark) return;
+
+        const x = landmark[0] * containerWidth + globalShimmer;
+        const y = landmark[1] * containerHeight + globalShimmer;
+
+        if (firstPoint) {
+          ctx.moveTo(x, y);
+          firstPoint = false;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+
+      if (!firstPoint) {
+        // Close the loop to connect to the starting shoulder
+        const startLandmark = landmarks[String(BODY_OUTLINE_PATH[2])]; // Right Shoulder (12)
+        if (startLandmark) {
+          ctx.lineTo(
+            startLandmark[0] * containerWidth + globalShimmer,
+            startLandmark[1] * containerHeight + globalShimmer
+          );
+        }
+      }
+
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    /**
+     * OPTIMIZED: Draws the complete skeleton with uniform thickness.
+     */
+    const drawSkeletonSegment = (landmarks, color, alpha, lineWidth, blur) => {
+      ctx.save();
+      // Set all context properties ONCE
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.globalAlpha = alpha;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = blur;
+
+      POSE_CONNECTIONS.forEach(([startIdx, endIdx]) => {
+        const start = landmarks[String(startIdx)];
+        const end = landmarks[String(endIdx)];
 
         if (start && end) {
-          // Calculate screen coordinates
-          const startX = start[0] * containerWidth;
-          const startY = start[1] * containerHeight;
-          const endX = end[0] * containerWidth;
-          const endY = end[1] * containerHeight;
-
-          // Create a subtle gradient for volumetric effect
-          const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
-          gradient.addColorStop(0, primaryColor);
-          gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.3)"); // Subtle highlight in the middle
-          gradient.addColorStop(1, primaryColor);
-
-          ctx.strokeStyle = gradient;
-
           ctx.beginPath();
-          ctx.moveTo(startX, startY);
-          ctx.lineTo(endX, endY);
+          ctx.moveTo(start[0] * containerWidth, start[1] * containerHeight);
+          ctx.lineTo(end[0] * containerWidth, end[1] * containerHeight);
           ctx.stroke();
         }
       });
       ctx.restore();
     };
 
-    const drawJoints = (landmarks, pulseIntensity) => {
+    /**
+     * OPTIMIZED: Draws the key landmark points using batched drawing for performance.
+     */
+    const drawLandmarkPoints = (
+      landmarks,
+      color,
+      glowColor,
+      pulseIntensity
+    ) => {
+      // Key joints for visual emphasis
+      const keyJoints = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+      const pointSize = 7;
+
       ctx.save();
-      const jointRadius = 13;
-      const landmarkEntries = Object.entries(landmarks);
+      ctx.globalAlpha = pulseIntensity * 0.95;
 
-      // 1. Draw Outer Glow (Single Pass)
-      ctx.fillStyle = colorScheme.glow;
-      ctx.globalAlpha = 0.35 * pulseIntensity;
-      landmarkEntries.forEach(([idx, coords]) => {
-        ctx.beginPath();
-        ctx.arc(
-          coords[0] * containerWidth,
-          coords[1] * containerHeight,
-          jointRadius * 1.8,
-          0,
-          2 * Math.PI
-        );
-        ctx.fill();
+      // --- 1. Draw Outer Glow Layer (Batched drawing) ---
+      ctx.fillStyle = glowColor;
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+
+      keyJoints.forEach((idx) => {
+        const landmark = landmarks[String(idx)];
+        if (landmark) {
+          const x = landmark[0] * containerWidth;
+          const y = landmark[1] * containerHeight;
+          ctx.moveTo(x, y); // Move to center for next arc
+          ctx.arc(x, y, pointSize + 1, 0, 2 * Math.PI);
+        }
       });
+      ctx.fill();
 
-      // 2. Draw Main Joints and Highlights (Single Pass)
-      ctx.globalAlpha = 1;
-      landmarkEntries.forEach(([idx, coords]) => {
-        const x = coords[0] * containerWidth;
-        const y = coords[1] * containerHeight;
+      // --- 2. Draw Inner Core Layer (Batched drawing) ---
+      ctx.shadowBlur = 5; // Reduced blur for inner core
+      ctx.fillStyle = color;
+      ctx.beginPath();
 
-        // Main joint body
-        ctx.fillStyle = colorScheme.primary;
-        ctx.beginPath();
-        ctx.arc(x, y, jointRadius, 0, 2 * Math.PI);
-        ctx.fill();
-
-        // Highlight/Reflection (White)
-        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-        ctx.beginPath();
-        ctx.arc(
-          x - jointRadius * 0.3,
-          y - jointRadius * 0.3,
-          jointRadius * 0.3,
-          0,
-          2 * Math.PI
-        );
-        ctx.fill();
+      keyJoints.forEach((idx) => {
+        const landmark = landmarks[String(idx)];
+        if (landmark) {
+          const x = landmark[0] * containerWidth;
+          const y = landmark[1] * containerHeight;
+          ctx.moveTo(x, y); // Move to center for next arc
+          ctx.arc(x, y, pointSize * 0.5, 0, 2 * Math.PI);
+        }
       });
+      ctx.fill();
+
       ctx.restore();
     };
 
+    /**
+     * Handles the trail data and draws all trail segments.
+     */
     const drawGhost = () => {
-      ctx.clearRect(0, 0, containerWidth, containerHeight);
+      // Use low opacity clear to create the volumetric trail effect
+      ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
+      ctx.fillRect(0, 0, containerWidth, containerHeight);
 
-      const { landmarks, connections } = ghostPoseData;
+      const { landmarks, color } = ghostPoseData;
 
-      if (
-        !landmarks ||
-        Object.keys(landmarks).length < 2 ||
-        !connections ||
-        connections.length === 0
-      ) {
+      if (!landmarks || Object.keys(landmarks).length < 2) {
         return;
       }
 
-      pulsePhaseRef.current += 0.08;
-      const pulseIntensity = Math.sin(pulsePhaseRef.current) * 0.2 + 0.8;
-      const glowBlur = 15 * pulseIntensity;
+      // --- Smoothing Logic for Current Frame ---
+      let currentFrameLandmarks = landmarks;
+      if (smoothedLandmarksRef.current) {
+        const newSmoothedLandmarks = {};
 
-      // 1. Draw Skeleton Glow Layer
-      ctx.save();
-      ctx.strokeStyle = colorScheme.glow;
-      ctx.lineWidth = 14;
-      ctx.globalAlpha = 0.3 * pulseIntensity;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+        // Interpolate each landmark position
+        Object.keys(landmarks).forEach((key) => {
+          const newPos = landmarks[key];
+          const oldPos = smoothedLandmarksRef.current[key];
 
-      ctx.beginPath();
-      connections.forEach(([startIdx, endIdx]) => {
-        const start = landmarks[String(startIdx)];
-        const end = landmarks[String(endIdx)];
+          if (oldPos && newPos) {
+            // Temporal interpolation
+            newSmoothedLandmarks[key] = [
+              oldPos[0] * (1 - SMOOTHING_FACTOR) + newPos[0] * SMOOTHING_FACTOR,
+              oldPos[1] * (1 - SMOOTHING_FACTOR) + newPos[1] * SMOOTHING_FACTOR,
+            ];
+          } else {
+            newSmoothedLandmarks[key] = newPos;
+          }
+        });
 
-        if (start && end) {
-          ctx.moveTo(start[0] * containerWidth, start[1] * containerHeight);
-          ctx.lineTo(end[0] * containerWidth, end[1] * containerHeight);
-        }
+        smoothedLandmarksRef.current = newSmoothedLandmarks;
+        currentFrameLandmarks = newSmoothedLandmarks; // USE SMOOTHED LANDMARKS
+      } else {
+        // First frame: just use the raw data
+        smoothedLandmarksRef.current = { ...landmarks };
+      }
+
+      // --- Update Trail Buffer (Uses the raw, unsmoothed pose for the ghost echo) ---
+      trailData.pop();
+      trailData.unshift({
+        landmarks: landmarks,
+        color: color,
+        timestamp: performance.now(),
       });
-      ctx.stroke();
-      ctx.restore();
 
-      // 2. Draw Main Skeleton with Gradient (Volumetric look)
-      drawSkeletonWithGradient(
-        connections,
-        colorScheme.primary,
-        colorScheme.glow
+      pulsePhaseRef.current += 0.08;
+      const time = performance.now() / 100;
+      const pulseIntensity = Math.sin(pulsePhaseRef.current) * 0.15 + 0.85;
+
+      const currentColorScheme =
+        GHOST_COLORS[color.toUpperCase()] || GHOST_COLORS.GRAY;
+
+      // --- Draw Trail Segments (Ethereal Echo - Uses the perimeter path) ---
+      trailData.forEach((frame, index) => {
+        if (!frame.landmarks) return;
+
+        const baseAlpha = 0.05;
+        const decayFactor = (TRAIL_LENGTH - index) / TRAIL_LENGTH;
+
+        // Draw ONLY the outer glow layer for performance.
+        drawPathSegment(
+          frame.landmarks,
+          GHOST_COLORS[frame.color.toUpperCase()].glow,
+          baseAlpha * decayFactor * 3, // Trail fades out
+          40, // Very wide for heavy bloom
+          20 * decayFactor, // Blur decreases as it fades
+          time
+        );
+      });
+
+      // --- Draw Current Frame (Index 0 - Full Skeleton) ---
+
+      // 1. Full Skeleton Glow (Wide, translucent)
+      drawSkeletonSegment(
+        currentFrameLandmarks, // Use smoothed landmarks
+        currentColorScheme.glow,
+        pulseIntensity * 0.5,
+        10, // Base width
+        30
       );
 
-      // 3. Draw Joints and Highlights
-      drawJoints(landmarks, pulseIntensity);
+      // 2. Full Skeleton Core (Sharp, primary color)
+      drawSkeletonSegment(
+        currentFrameLandmarks, // Use smoothed landmarks
+        currentColorScheme.primary,
+        pulseIntensity * 0.95,
+        5, // Constant line width for speed
+        8
+      );
+
+      // 3. Draw Landmark Points (Optimized for performance)
+      drawLandmarkPoints(
+        currentFrameLandmarks, // Use smoothed landmarks
+        currentColorScheme.primary,
+        currentColorScheme.glow,
+        pulseIntensity
+      );
     };
 
     const animate = () => {
@@ -202,12 +427,11 @@ const GhostModelOverlay = ({ ghostPoseData }) => {
       drawGhost();
     };
 
-    animate(); // Start animation loop
+    animate();
 
-    // Handle resize efficiently
     const handleResize = () => {
       setCanvasDimensions();
-      drawGhost(); // Redraw immediately after resize
+      drawGhost();
     };
 
     window.addEventListener("resize", handleResize);
@@ -218,42 +442,14 @@ const GhostModelOverlay = ({ ghostPoseData }) => {
       }
       window.removeEventListener("resize", handleResize);
     };
-  }, [ghostPoseData, colorScheme]); // Dependency array is clean
+  }, [ghostPoseData, colorScheme]);
 
   return (
     <>
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          zIndex: 15,
-          pointerEvents: "none",
-        }}
-      />
+      <canvas ref={canvasRef} style={canvasStyle} />
 
-      {/* Compact legend */}
-      <div
-        style={{
-          position: "absolute",
-          top: "20px",
-          right: "20px",
-          background:
-            "linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(31, 41, 55, 0.95))",
-          padding: "16px 20px",
-          borderRadius: "14px",
-          zIndex: 20,
-          color: "white",
-          fontSize: "0.85rem",
-          fontWeight: "600",
-          backdropFilter: "blur(15px)",
-          border: "1px solid rgba(255, 255, 255, 0.1)",
-          boxShadow: "0 4px 20px rgba(0, 0, 0, 0.3)",
-        }}
-      >
+      {/* Compact legend (Uses extracted styles) */}
+      <div style={legendContainerStyle}>
         <div
           style={{
             marginBottom: "10px",
@@ -263,13 +459,13 @@ const GhostModelOverlay = ({ ghostPoseData }) => {
             fontWeight: "800",
           }}
         >
-          FORM GUIDE
+          FORM GUIDE (VOLUMETRIC ECHO)
         </div>
 
         {[
-          { color: "GREEN", label: "Perfect", icon: "✓" },
-          { color: "YELLOW", label: "Moving", icon: "→" },
-          { color: "RED", label: "Adjust", icon: "!" },
+          { color: "GREEN", label: "Optimal Flow", icon: "✓" },
+          { color: "YELLOW", label: "Transitioning", icon: "→" },
+          { color: "RED", label: "Energy Disruption", icon: "!" },
         ].map(({ color, label, icon }) => (
           <div
             key={color}
@@ -302,31 +498,9 @@ const GhostModelOverlay = ({ ghostPoseData }) => {
         ))}
       </div>
 
-      {/* Instruction banner */}
+      {/* Instruction banner (Uses extracted styles) */}
       {ghostPoseData?.instruction && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: "100px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: colorScheme.primary,
-            padding: "14px 32px",
-            borderRadius: "40px",
-            fontSize: "1.05rem",
-            fontWeight: "800",
-            color: "white",
-            whiteSpace: "nowrap",
-            boxShadow: `0 6px 24px ${colorScheme.glow}, 0 0 0 1px rgba(255, 255, 255, 0.2) inset`,
-            backdropFilter: "blur(8px)",
-            zIndex: 25,
-            letterSpacing: "0.5px",
-            textTransform: "uppercase",
-            animation: "floatSmooth 2.5s ease-in-out infinite",
-          }}
-        >
-          {ghostPoseData.instruction}
-        </div>
+        <div style={instructionBannerStyle}>{ghostPoseData.instruction}</div>
       )}
 
       <style>{`
