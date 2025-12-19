@@ -18,8 +18,8 @@ import HomeRedirect from "./HomeRedirect";
 
 // --- THERAPIST PAGES ---
 import TherapistPatientMonitoring from "./pages/TherapistPatientMonitoring";
-import TherapistExerciseLibrary from "./pages/TherapistExerciseLibrary";
-import TherapistProtocolManager from "./pages/TherapistProtocolManager";
+// ✅ NEW: Import the Assignment Manager (Option A)
+import TherapistAssignmentManager from "./pages/TherapistAssignmentManager"; 
 import TherapistNotificationLog from "./pages/TherapistNotificationLog";
 import TherapistAnalytics from "./pages/TherapistAnalytics";
 import SessionReviewScreen from "./components/SessionReviewScreen";
@@ -80,14 +80,13 @@ function App() {
                 path="/therapist/monitoring"
                 element={<TherapistPatientMonitoring />}
               />
+              
+              {/* ✅ NEW: Assignment Manager Route */}
               <Route
-                path="/therapist/library"
-                element={<TherapistExerciseLibrary />}
+                path="/therapist/assignments"
+                element={<TherapistAssignmentManager />}
               />
-              <Route
-                path="/therapist/protocols"
-                element={<TherapistProtocolManager />}
-              />
+
               <Route
                 path="/therapist/notifications"
                 element={<TherapistNotificationLog />}
