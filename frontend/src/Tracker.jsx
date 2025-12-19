@@ -17,7 +17,10 @@ import {
   User,
   Loader,
   RefreshCw,
-  Target, // New icon for Accuracy
+  Target, 
+  ShieldAlert, // For Warning Modal
+  ClipboardList, // For Assigned Section
+  Library // For Library Section
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "./context/AuthContext";
@@ -49,11 +52,15 @@ const Tracker = () => {
   const [exercises, setExercises] = useState([]);
   const [selectedExercise, setSelectedExercise] = useState(null);
 
+  // Warning Modal State
+  const [warningModalOpen, setWarningModalOpen] = useState(false);
+  const [pendingExercise, setPendingExercise] = useState(null);
+
   const [active, setActive] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
 
-  // <<< UPDATED DATA STATE TO INCLUDE ACCURACY >>>
+  // Data State (Includes Accuracy)
   const [data, setData] = useState({
     RIGHT: {
       feedback_color: "GRAY",
@@ -61,7 +68,7 @@ const Tracker = () => {
       stage: "DOWN",
       angle: 0,
       feedback: "",
-      accuracy: 100, // NEW field
+      accuracy: 100, 
     },
     LEFT: {
       feedback_color: "GRAY",
@@ -69,7 +76,7 @@ const Tracker = () => {
       stage: "DOWN",
       angle: 0,
       feedback: "",
-      accuracy: 100, // NEW field
+      accuracy: 100, 
     },
     status: "INACTIVE",
     calibration: { message: "Waiting for camera...", progress: 0 },
@@ -128,6 +135,7 @@ const Tracker = () => {
       handleWorkoutUpdate(json);
     });
 
+    // Initial Fetch
     fetchExercises();
 
     return () => {
@@ -138,10 +146,19 @@ const Tracker = () => {
     };
   }, [navigate]);
 
+  // ✅ NEW EFFECT: Re-fetch exercises when 'user' loads
+  useEffect(() => {
+    if (user) {
+        fetchExercises();
+    }
+  }, [user]);
+
   const fetchExercises = async () => {
     setFetchError(false);
     try {
-      const response = await fetch(`${API_URL}/api/exercises`);
+      // Pass email to API to get assignment status
+      const emailParam = user?.email ? `?email=${user.email}` : '';
+      const response = await fetch(`${API_URL}/api/exercises${emailParam}`);
       if (response.ok) {
         const data = await response.json();
         setExercises(data);
@@ -161,9 +178,31 @@ const Tracker = () => {
     navigate("/report");
   };
 
-  // --- 2. LOGIC HANDLER (RE-DESIGNED FOR USER CENTERED FEEDBACK) ---
+  // --- 2. EXERCISE SELECTION & WARNING LOGIC ---
+  const handleExerciseClick = (ex) => {
+    if (ex.recommended) {
+      // Direct access if assigned
+      setSelectedExercise(ex);
+      setViewMode("DEMO");
+    } else {
+      // Trigger warning if not assigned
+      setPendingExercise(ex);
+      setWarningModalOpen(true);
+    }
+  };
+
+  const confirmPendingExercise = () => {
+    if (pendingExercise) {
+      setSelectedExercise(pendingExercise);
+      setViewMode("DEMO");
+      setWarningModalOpen(false);
+      setPendingExercise(null);
+    }
+  };
+
+  // --- 3. LOGIC HANDLER (USER CENTERED FEEDBACK) ---
   const handleWorkoutUpdate = (json) => {
-    // 1. SILENCED CALIBRATION: Only speak when the message actually changes
+    // 1. SILENCED CALIBRATION
     if (json.status === "CALIBRATION") {
       const calMsg = json.calibration?.message || "Calibrating...";
       setFeedback(calMsg);
@@ -186,14 +225,13 @@ const Tracker = () => {
         triggerSpeech("Start");
       }
     }
-    // 3. ACTIVE: Stable non-repetitive coaching
+    // 3. ACTIVE
     else if (json.status === "ACTIVE") {
       setCountdownValue(null);
 
       let msg = json.ghost_pose?.instruction || "MAINTAIN FORM";
       let alertMsg = "";
 
-      // Overwrite primary message with error feedback if present
       if (json.RIGHT && json.RIGHT.feedback) {
         msg = json.RIGHT.feedback;
         alertMsg = json.RIGHT.feedback;
@@ -204,7 +242,6 @@ const Tracker = () => {
 
       setFeedback(msg);
 
-      // Only trigger speech if it's a NEW coaching instruction
       if (alertMsg && alertMsg !== lastSpokenRef.current) {
         triggerSpeech(alertMsg);
       }
@@ -312,70 +349,68 @@ const Tracker = () => {
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // --- RENDER LIBRARY ---
-  const renderLibrary = () => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      style={{
-        maxWidth: "1200px",
-        margin: "0 auto",
-        padding: "40px 5%",
-        width: "100%",
-      }}
-    >
-      <div
+  // --- RENDER LIBRARY (NEW SPLIT DESIGN) ---
+  const renderLibrary = () => {
+    // Separate exercises into Assigned vs Library
+    const assigned = exercises.filter(ex => ex.recommended);
+    const other = exercises.filter(ex => !ex.recommended);
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "50px",
+          maxWidth: "1200px",
+          margin: "0 auto",
+          padding: "40px 5%",
+          width: "100%",
         }}
       >
-        <div>
-          <h1
-            style={{
-              fontSize: "2.5rem",
-              color: "#1A3C34",
-              fontWeight: "800",
-              marginBottom: "10px",
-            }}
-          >
-            Exercise Library
-          </h1>
-          <p style={{ color: "#4A635D", fontSize: "1.1rem" }}>
-            Select a routine to start your guided recovery session.
-          </p>
-        </div>
-        <button
-          onClick={() => navigate("/")}
+        <div
           style={{
-            background: "#fff",
-            border: "1px solid #ddd",
-            padding: "10px 20px",
-            borderRadius: "30px",
-            color: "#4A635D",
-            cursor: "pointer",
             display: "flex",
+            justifyContent: "space-between",
             alignItems: "center",
-            gap: "8px",
-            fontWeight: "600",
-            transition: "all 0.2s",
+            marginBottom: "50px",
           }}
         >
-          <ArrowLeft size={18} /> Dashboard
-        </button>
-      </div>
+          <div>
+            <h1
+              style={{
+                fontSize: "2.5rem",
+                color: "#1A3C34",
+                fontWeight: "800",
+                marginBottom: "10px",
+              }}
+            >
+              Training Center
+            </h1>
+            <p style={{ color: "#4A635D", fontSize: "1.1rem" }}>
+              Select a routine to start your guided recovery session.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate("/")}
+            style={{
+              background: "#fff",
+              border: "1px solid #ddd",
+              padding: "10px 20px",
+              borderRadius: "30px",
+              color: "#4A635D",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontWeight: "600",
+              transition: "all 0.2s",
+            }}
+          >
+            <ArrowLeft size={18} /> Dashboard
+          </button>
+        </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: "30px",
-        }}
-      >
-        {fetchError ? (
+        {fetchError && (
           <div
             style={{
               gridColumn: "1 / -1",
@@ -407,132 +442,68 @@ const Tracker = () => {
               <RefreshCw size={16} /> Retry Connection
             </button>
           </div>
-        ) : exercises.length === 0 ? (
-          <p
-            style={{ gridColumn: "1 / -1", textAlign: "center", color: "#888" }}
-          >
-            Loading exercises...
-          </p>
-        ) : (
-          exercises.map((ex) => (
-            <motion.div
-              key={ex.id}
-              whileHover={{ y: -5, boxShadow: "0 15px 30px rgba(0,0,0,0.08)" }}
-              onClick={() => {
-                setSelectedExercise(ex);
-                setViewMode("DEMO");
-              }}
-              style={{
-                background: "#fff",
-                borderRadius: "25px",
-                padding: "30px",
-                boxShadow: "0 5px 20px rgba(0,0,0,0.04)",
-                cursor: "pointer",
-                border: ex.recommended
-                  ? "2px solid #69B341"
-                  : "1px solid transparent",
-                position: "relative",
-                overflow: "hidden",
-              }}
-            >
-              {ex.recommended && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "20px",
-                    right: "20px",
-                    background: "#E8F5E9",
-                    color: "#2C5D31",
-                    padding: "6px 14px",
-                    borderRadius: "20px",
-                    fontSize: "0.75rem",
-                    fontWeight: "800",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                  }}
-                >
-                  <CheckCircle size={14} /> RECOMMENDED
-                </div>
-              )}
-
-              <div
-                style={{
-                  width: "60px",
-                  height: "60px",
-                  borderRadius: "18px",
-                  background: ex.color,
-                  marginBottom: "25px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Dumbbell color={ex.iconColor} size={28} />
-              </div>
-
-              <h3
-                style={{
-                  fontSize: "1.5rem",
-                  color: "#1A3C34",
-                  marginBottom: "8px",
-                  fontWeight: "700",
-                }}
-              >
-                {ex.title}
-              </h3>
-              <div
-                style={{
-                  fontSize: "0.85rem",
-                  color: "#888",
-                  fontWeight: "600",
-                  marginBottom: "20px",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.5px",
-                }}
-              >
-                {ex.category}
-              </div>
-
-              <p
-                style={{
-                  color: "#555",
-                  fontSize: "0.95rem",
-                  marginBottom: "25px",
-                  lineHeight: "1.6",
-                }}
-              >
-                {ex.description}
-              </p>
-
-              <div
-                style={{
-                  borderTop: "1px solid #f0f0f0",
-                  paddingTop: "20px",
-                  display: "flex",
-                  gap: "20px",
-                  fontSize: "0.9rem",
-                  color: "#666",
-                  fontWeight: "500",
-                }}
-              >
-                <span
-                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
-                >
-                  <Timer size={16} /> {ex.duration}
-                </span>
-                <span
-                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
-                >
-                  <Activity size={16} /> {ex.difficulty}
-                </span>
-              </div>
-            </motion.div>
-          ))
         )}
-      </div>
-    </motion.div>
-  );
+
+        {/* --- SECTION 1: ASSIGNED EXERCISES --- */}
+        <div style={{ marginBottom: "60px" }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '25px', paddingBottom: '10px', borderBottom: '2px solid #e0e0e0' }}>
+            <ClipboardList size={24} color="#2C5D31" />
+            <h2 style={{ fontSize: "1.5rem", color: "#1A3C34", fontWeight: "700", margin: 0 }}>Prescribed by Therapist</h2>
+          </div>
+          
+          {assigned.length > 0 ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "30px" }}>
+              {assigned.map((ex) => (
+                <ExerciseCard key={ex.id} ex={ex} onClick={() => handleExerciseClick(ex)} isAssigned={true} />
+              ))}
+            </div>
+          ) : (
+             <div style={{ padding: '30px', background: '#fff', borderRadius: '15px', textAlign: 'center', color: '#888' }}>
+               No specific exercises assigned today. Check "Exercise Library" below.
+             </div>
+          )}
+        </div>
+
+        {/* --- SECTION 2: EXERCISE LIBRARY --- */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '25px', paddingBottom: '10px', borderBottom: '2px solid #e0e0e0' }}>
+            <Library size={24} color="#666" />
+            <h2 style={{ fontSize: "1.5rem", color: "#666", fontWeight: "700", margin: 0 }}>Exercise Library</h2>
+          </div>
+          
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "30px" }}>
+            {other.map((ex) => (
+              <ExerciseCard key={ex.id} ex={ex} onClick={() => handleExerciseClick(ex)} isAssigned={false} />
+            ))}
+          </div>
+        </div>
+
+        {/* --- WARNING MODAL --- */}
+        <AnimatePresence>
+          {warningModalOpen && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(5px)' }}>
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+                style={{ background: 'white', padding: '40px', borderRadius: '24px', maxWidth: '450px', width: '90%', textAlign: 'center', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }}
+              >
+                <div style={{ width: '80px', height: '80px', background: '#FEF2F2', borderRadius: '50%', color: '#DC2626', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px auto' }}>
+                  <ShieldAlert size={40} />
+                </div>
+                <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#111827', marginBottom: '12px' }}>Clinical Warning</h3>
+                <p style={{ color: '#4B5563', fontSize: '1rem', lineHeight: '1.6', marginBottom: '32px' }}>
+                  The exercise <strong>"{pendingExercise?.title}"</strong> is not in your assigned protocol. Performing unassigned exercises may increase injury risk.
+                </p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button onClick={() => setWarningModalOpen(false)} style={{ flex: 1, padding: '12px', borderRadius: '12px', border: '1px solid #E5E7EB', background: 'white', color: '#374151', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                  <button onClick={confirmPendingExercise} style={{ flex: 1, padding: '12px', borderRadius: '12px', border: 'none', background: '#DC2626', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Proceed Anyway</button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    );
+  };
 
   // --- RENDER DEMO ---
   const renderDemo = () => {
@@ -836,7 +807,7 @@ const Tracker = () => {
                       {arm} {jointName.toUpperCase()}
                     </h3>
 
-                    {/* NEW: DYNAMIC ACCURACY BADGE */}
+                    {/* DYNAMIC ACCURACY BADGE */}
                     <div
                       style={{
                         background:
@@ -1152,5 +1123,64 @@ const Tracker = () => {
     </div>
   );
 };
+
+// --- SUBCOMPONENT FOR EXERCISE CARD ---
+const ExerciseCard = ({ ex, onClick, isAssigned }) => (
+  <motion.div
+    whileHover={{ y: -5, boxShadow: "0 15px 30px rgba(0,0,0,0.08)" }}
+    onClick={onClick}
+    style={{
+      background: "#fff",
+      borderRadius: "25px",
+      padding: "30px",
+      boxShadow: "0 5px 20px rgba(0,0,0,0.04)",
+      cursor: "pointer",
+      border: isAssigned ? "2px solid #69B341" : "1px solid transparent",
+      position: "relative",
+      overflow: "hidden",
+      opacity: isAssigned ? 1 : 0.85
+    }}
+  >
+    {isAssigned && (
+      <div style={{
+        position: "absolute",
+        top: "20px",
+        right: "20px",
+        background: "#E8F5E9",
+        color: "#2C5D31",
+        padding: "6px 14px",
+        borderRadius: "20px",
+        fontSize: "0.75rem",
+        fontWeight: "800",
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+      }}>
+        <CheckCircle size={14} /> ASSIGNED
+      </div>
+    )}
+
+    <div style={{
+      width: "60px",
+      height: "60px",
+      borderRadius: "18px",
+      background: ex.color,
+      marginBottom: "25px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+    }}>
+      <Dumbbell color={ex.iconColor} size={28} />
+    </div>
+
+    <h3 style={{ fontSize: "1.5rem", color: "#1A3C34", marginBottom: "8px", fontWeight: "700" }}>{ex.title}</h3>
+    <div style={{ fontSize: "0.85rem", color: "#888", fontWeight: "600", marginBottom: "20px", textTransform: "uppercase", letterSpacing: "0.5px" }}>{ex.category}</div>
+    <p style={{ color: "#555", fontSize: "0.95rem", marginBottom: "25px", lineHeight: "1.6" }}>{ex.description}</p>
+    <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: "20px", display: "flex", gap: "20px", fontSize: "0.9rem", color: "#666", fontWeight: "500" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: "6px" }}><Timer size={16} /> {ex.duration}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: "6px" }}><Activity size={16} /> {ex.difficulty}</span>
+    </div>
+  </motion.div>
+);
 
 export default Tracker;

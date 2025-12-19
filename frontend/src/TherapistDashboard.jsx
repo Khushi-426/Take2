@@ -5,8 +5,8 @@ import TherapistAlertsPanel from './components/TherapistAlertsPanel.jsx';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import { 
-  Users, Activity, BookOpen, ClipboardList, 
-  Bell, BarChart3, LogOut, ChevronRight, AlertTriangle, ShieldCheck 
+  Users, Activity, ClipboardList, 
+  BarChart3, LogOut, ChevronRight, AlertTriangle, ShieldCheck 
 } from 'lucide-react';
 
 const TherapistDashboard = () => {
@@ -14,7 +14,7 @@ const TherapistDashboard = () => {
   const navigate = useNavigate(); 
   const [stats, setStats] = useState({
     totalPatients: 0,
-    activeProtocols: 0,
+    activePlans: 0,
     highRiskCount: 0,
     newPatientsLastMonth: 0
   });
@@ -24,6 +24,7 @@ const TherapistDashboard = () => {
       try {
         const res = await axios.get('http://localhost:5001/api/therapist/patients');
         const patients = res.data.patients || [];
+        // Renaming "Active Protocols" logic to "Active Plans"
         const active = patients.filter(p => p.hasActiveProtocol).length;
         const highRisk = patients.filter(p => p.status === 'High Risk').length;
         const oneMonthAgo = new Date();
@@ -32,7 +33,7 @@ const TherapistDashboard = () => {
 
         setStats({ 
             totalPatients: patients.length, 
-            activeProtocols: active, 
+            activePlans: active, 
             highRiskCount: highRisk,
             newPatientsLastMonth: newPatients 
         });
@@ -45,11 +46,33 @@ const TherapistDashboard = () => {
 
   const handleLogout = () => { if (logout) logout(); navigate('/auth/login'); };
 
+  // --- UPDATED ACTION ZONES ---
   const actionZones = [
-    { title: 'Patient Monitoring', label: 'Review Compliance & Risk', icon: <Users size={22}/>, path: '/therapist/monitoring', desc: 'Real-time adherence & status tracking', border: '#6366F1' },
-    { title: 'Advanced Analytics', label: 'AI Recovery Insights', icon: <BarChart3 size={22}/>, path: '/therapist/analytics', desc: 'Neural forecasting of patient progress', border: '#6366F1' },
-    { title: 'Exercise Library', label: 'Clinical Movement Repository', icon: <BookOpen size={22}/>, path: '/therapist/library', desc: 'Standardized therapeutic movements', border: '#0F172A' },
-    { title: 'Protocol Manager', label: 'Treatment Design & Assignment', icon: <ClipboardList size={22}/>, path: '/therapist/protocols', desc: 'Prescribe recovery pathways', border: '#0F172A' },
+    { 
+      title: 'Patient Monitoring', 
+      label: 'Review Compliance & Risk', 
+      icon: <Users size={22}/>, 
+      path: '/therapist/monitoring', 
+      desc: 'Real-time adherence & status tracking', 
+      border: '#6366F1' 
+    },
+    { 
+      title: 'Advanced Analytics', 
+      label: 'AI Recovery Insights', 
+      icon: <BarChart3 size={22}/>, 
+      path: '/therapist/analytics', 
+      desc: 'Neural forecasting of patient progress', 
+      border: '#6366F1' 
+    },
+    // NEW "ASSIGN EXERCISES" CARD (Replaces Protocol & Library)
+    { 
+      title: 'Assign Exercises', 
+      label: 'Patient Prescriptions', 
+      icon: <ClipboardList size={22}/>, 
+      path: '/therapist/assignments', 
+      desc: 'Assign exercises directly to patients', 
+      border: '#10B981' // Green accent
+    },
   ];
 
   return (
@@ -73,7 +96,7 @@ const TherapistDashboard = () => {
           <div style={styles.statsGrid}>
             <StatCard label="Total Patient Load" value={stats.totalPatients} icon={<Users color="#6366F1"/>} subText="Total onboarded population" border="#6366F1" />
             <StatCard label="Critical Risk Cases" value={stats.highRiskCount} icon={<AlertTriangle color="#EF4444"/>} color="#EF4444" subText="Urgent intervention required" border={stats.highRiskCount > 0 ? "#EF4444" : "#22C55E"} isRisk={stats.highRiskCount > 0} />
-            <StatCard label="Active Protocols" value={stats.activeProtocols} icon={<Activity color="#14B8A6"/>} subText="In-progress treatment plans" border="#22C55E" />
+            <StatCard label="Active Plans" value={stats.activePlans} icon={<Activity color="#14B8A6"/>} subText="In-progress treatment plans" border="#22C55E" />
             <StatCard label="System Integrity" value="Stable" icon={<ShieldCheck color="#0F172A"/>} subText="AI Monitoring active" border="#0F172A" />
           </div>
         </section>

@@ -532,9 +532,91 @@ def google_auth():
         logger.error(f"Google Auth Error: {e}")
         return jsonify({"error": "Internal Server Error during Google Auth"}), 500
 
+# ----------------------------------------------------
+# 9. ASSIGN EXERCISE (NEW ROUTE)
+# ----------------------------------------------------
+@app.route("/api/assign", methods=["POST"])
+def assign_exercise():
+    """Allows a therapist to assign a protocol to a patient."""
+    if protocols_collection is None or users_collection is None:
+        return jsonify({"error": "Database unavailable"}), 503
+
+    data = request.get_json(silent=True) or {}
+    patient_email = data.get("patientEmail")
+    exercise_name = data.get("exerciseName")
+    duration = data.get("duration", 7)
+
+    if not patient_email or not exercise_name:
+        return jsonify({"error": "Patient email and exercise name required"}), 400
+
+    # 1. Find Patient
+    patient = users_collection.find_one({"email": patient_email})
+    if not patient:
+        return jsonify({"error": "Patient not found"}), 404
+
+    # 2. Find Therapist (Optional: For now using a placeholder or first therapist found)
+    # Ideally, get this from the logged-in therapist's token/session
+    therapist = users_collection.find_one({"role": "therapist"})
+    therapist_id = therapist["_id"] if therapist else patient["_id"] # Fallback
+
+    # 3. Create Protocol Document
+    # We use update_one with upsert to prevent duplicates for the same exercise
+    protocol_doc = {
+        "therapist": therapist_id,
+        "patient": patient["_id"],
+        "exerciseName": exercise_name,
+        "sets": 3,
+        "reps": 10,
+        "difficulty": "MEDIUM",
+        "isActive": True,
+        "createdAt": datetime.now(),
+        "updatedAt": datetime.now()
+    }
+    
+    protocols_collection.update_one(
+        {"patient": patient["_id"], "exerciseName": exercise_name},
+        {"$set": protocol_doc},
+        upsert=True
+    )
+
+    return jsonify({"status": "assigned", "exercise": exercise_name}), 200
+
+# ----------------------------------------------------
+# 10. GET EXERCISES (UPDATED to check assignments)
+# ----------------------------------------------------
 @app.route("/api/exercises", methods=["GET"])
 def get_exercises():
-    return jsonify(_get_frontend_exercise_list())
+    # 1. Base List of Exercises
+    base_list = _get_frontend_exercise_list()
+
+    # 2. Check Assignments if email provided
+    email = request.args.get('email')
+    assigned_titles = []
+    
+    if email and users_collection is not None and protocols_collection is not None:
+        user = users_collection.find_one({"email": email})
+        if user:
+            # Find active protocols for this user
+            protocols = protocols_collection.find({"patient": user["_id"], "isActive": True})
+            for p in protocols:
+                # Map protocol exercise names to titles (simple match)
+                ex_name = p.get("exerciseName", "")
+                
+                # Match logic: "bicep_curl" -> "Bicep Curl"
+                if "bicep" in ex_name.lower(): assigned_titles.append("Bicep Curl")
+                elif "shoulder" in ex_name.lower(): assigned_titles.append("Shoulder Press")
+                elif "knee" in ex_name.lower(): assigned_titles.append("Knee Lift")
+                elif "squat" in ex_name.lower(): assigned_titles.append("Squat")
+                elif "row" in ex_name.lower(): assigned_titles.append("Seated Row")
+
+    # 3. Mark Recommended Status
+    for ex in base_list:
+        if ex["title"] in assigned_titles:
+            ex["recommended"] = True
+        else:
+            ex["recommended"] = False
+
+    return jsonify(base_list)
 
 @app.route("/api/therapist/patients", methods=["GET"])
 def therapist_patients():
@@ -576,7 +658,7 @@ def therapist_notifications():
     return jsonify(response), 200
 
 # ----------------------------------------------------
-# 9. STREAMING ROUTES
+# 11. STREAMING ROUTES
 # ----------------------------------------------------
 @app.route("/start_tracking", methods=["POST", "OPTIONS"])
 def start_tracking():
@@ -627,7 +709,7 @@ def report_data():
     return jsonify({"error": "No session data found"})
 
 # ----------------------------------------------------
-# 10. RUN SERVER
+# 12. RUN SERVER
 # ----------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Starting Server with THREADING on Port 5001...")
